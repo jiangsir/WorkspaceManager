@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <base target="_top">
+    <link rel="stylesheet" href="https://ssl.gstatic.com/docs/script/css/add-ons1.css">
+    <style>
+      .container { padding: 10px; }
+      #status { display: none; margin-top: 15px; }
+      .button-container { margin-top: 15px; display: flex; gap: 10px; }
+      .delete { background-color: #dc3912; color: white; border-color: #dc3912; }
+      .delete:hover { background-color: #b0280e; border-color: #b0280e; }
+      .error { color: red; }
+      .success { color: green; }
+
+      /* 【主要變更 1】讓下拉選單的文字靠左對齊 */
+      #group-select {
+        width: 100%; /* 讓選單填滿寬度 */
+        text-align: left;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <h4>選擇一個群組</h4>
+      <select id="group-select" disabled>
+        <option value="">正在載入群組列表...</option>
+      </select>
+
+      <div class="button-container">
+        <button class="action" id="export-btn" disabled>匯出成員到新工作表</button>
+        <button class="delete" id="clear-btn" disabled>[危險] 清除所有成員</button>
+      </div>
+      
+      <div id="status"></div>
+    </div>
+
+    <script>
+      document.addEventListener('DOMContentLoaded', function() {
+        google.script.run
+          .withSuccessHandler(populateGroupSelect)
+          .withFailureHandler(showStatus)
+          .listAllGroups();
+      });
+
+      function populateGroupSelect(groups) {
+        var select = document.getElementById('group-select');
+        select.innerHTML = '';
+        
+        if (groups.length > 0 && groups[0].error) {
+           showStatus({ message: groups[0].error, success: false });
+           return;
+        }
+        if (groups.length === 0) {
+          select.innerHTML = '<option value="">未找到任何群組</option>';
+          return;
+        }
+
+        var defaultOption = document.createElement('option');
+        defaultOption.value = "";
+        defaultOption.textContent = "--- 請選擇一個群組 ---";
+        select.appendChild(defaultOption);
+
+        groups.forEach(function(group) {
+          var option = document.createElement('option');
+          option.value = group.email;
+          // 【主要變更 2】組合新的選項文字，包含成員數量
+          option.textContent = group.name + ' (' + group.memberCount + '人)';
+          select.appendChild(option);
+        });
+        
+        select.disabled = false;
+        document.getElementById('export-btn').disabled = false;
+        document.getElementById('clear-btn').disabled = false;
+      }
+
+      // ... 以下的 JavaScript 程式碼與之前版本相同，無需修改 ...
+      document.getElementById('export-btn').addEventListener('click', function() {
+        var selectedGroup = document.getElementById('group-select').value;
+        if (!selectedGroup) {
+          showStatus({ message: '請先選擇一個群組。', success: false });
+          return;
+        }
+        showStatus({ message: '<b>正在匯出，請稍候...</b>', isLoading: true });
+        google.script.run.withSuccessHandler(handleExportResult).withFailureHandler(showStatus).getGroupMembersForSidebar(selectedGroup);
+      });
+      document.getElementById('clear-btn').addEventListener('click', function() {
+        var selectedGroup = document.getElementById('group-select').value;
+        if (!selectedGroup) {
+          showStatus({ message: '請先選擇一個群組。', success: false });
+          return;
+        }
+        showStatus({ message: '<b>等待您的最終確認...</b>', isLoading: true });
+        google.script.run.withSuccessHandler(showStatus).withFailureHandler(showStatus).clearGroupMembers(selectedGroup);
+      });
+      function handleExportResult(result) {
+        if (result.success) {
+          var msg = result.noMembers ? result.message : result.memberCount + ' 位成員已成功匯出至工作表 "' + result.sheetName + '"。';
+          showStatus({ message: msg, success: true });
+        } else {
+          showStatus({ message: result.message, success: false });
+        }
+      }
+      function showStatus(status) {
+        var statusDiv = document.getElementById('status');
+        statusDiv.innerHTML = status.message;
+        if (status.isLoading || !status.message) {
+           statusDiv.className = '';
+        } else if (status.success === false) {
+           statusDiv.className = 'error';
+        } else {
+           statusDiv.className = 'success';
+        }
+        statusDiv.style.display = 'block';
+      }
+    </script>
+  </body>
+</html>
