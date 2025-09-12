@@ -7,7 +7,10 @@ function onOpen() {
       .addItem('依試算表資料批次處理', 'processUsersAndGroups_V2')
       .addSeparator()
       .addItem('查詢/匯出群組成員 (互動式)', 'showGroupManagementSidebar')
-      .addItem('匯出所有機構單位 (含人數)', 'exportOUsAndUserCounts') // 【新增這一行】
+      .addItem('匯出所有機構單位 (含人數)', 'exportOUsAndUserCounts')
+      .addSeparator()
+      .addItem('1.匯出全部@tea 清單', 'exportAllUsers')
+      .addItem('2.依據匯出sheet 更新使用者機構單位與職稱', 'updateUsersFromSheet') // 【新增這一行】
       .addToUi();
 }
 
@@ -465,7 +468,7 @@ function getGroupMembersForSidebar(groupEmail) {
     };
 
   } catch (e) {
-    Logger.log('從側邊欄匯出群組 ' + groupEmail + ' 成員時失敗: ' + e.toString());
+    Logger.log('從側邊匯出群組 ' + groupEmail + ' 成員時失敗: ' + e.toString());
     return { success: false, message: '無法獲取成員: ' + e.message };
   }
 }
@@ -575,5 +578,359 @@ function exportOUsAndUserCounts() {
     // 關閉側邊欄的 "處理中" 提示
     SpreadsheetApp.getUi().showSidebar(HtmlService.createHtmlOutput('<b>完成！</b>').setTitle('進度'));
   }
+}
+
+/**
+ * 匯出整個 tea 網域中的所有使用者資料到一個新的工作表。
+ * 包含使用者的基本資訊、機構單位、最後登入時間等詳細資訊。
+ */
+function exportAllUsers() {
+  var ui = SpreadsheetApp.getUi();
+  
+  // 第一層確認
+  var confirmation = ui.alert(
+    '匯出所有使用者',
+    '您即將匯出整個 tea 網域的所有使用者清單。\n\n此操作可能需要較長時間，確定要繼續嗎？',
+    ui.ButtonSet.YES_NO
+  );
+  
+  if (confirmation != ui.Button.YES) {
+    ui.alert('操作已取消。');
+    return;
+  }
+
+  ui.showSidebar(HtmlService.createHtmlOutput('<b>正在讀取所有使用者資料，這可能需要幾分鐘時間，請稍候...</b>').setTitle('處理中'));
+
+  var logMessages = ['開始讀取所有使用者...'];
+  var allUsers = [];
+  var processedCount = 0;
+
+  try {
+    // 步驟 1: 獲取所有使用者 - 【修改】使用 organizations 欄位來取得 title
+    var pageToken;
+    do {
+      var page = AdminDirectory.Users.list({
+        customer: 'my_customer',
+        maxResults: 500,
+        pageToken: pageToken,
+        // 【修改】加入 organizations 欄位來取得職稱資訊
+        fields: 'nextPageToken,users(primaryEmail,name,orgUnitPath,organizations,suspended,creationTime,lastLoginTime)'
+      });
+      
+      if (page.users) {
+        allUsers = allUsers.concat(page.users);
+        processedCount += page.users.length;
+        logMessages.push('已讀取 ' + processedCount + ' 位使用者...');
+      }
+      pageToken = page.nextPageToken;
+    } while (pageToken);
+
+    if (allUsers.length === 0) {
+      ui.alert('結果', '未找到任何使用者。', ui.ButtonSet.OK);
+      return;
+    }
+
+    logMessages.push('使用者資料讀取完成，共 ' + allUsers.length + ' 位使用者，開始整理資料...');
+
+    // 步驟 2: 準備要寫入工作表的資料 - 在機構單位路徑後加入 Employee Title 欄位
+    var outputData = [[
+      '使用者 Email',
+      '姓 (Family Name)', 
+      '名 (Given Name)',
+      '機構單位路徑',
+      'Employee Title',
+      '帳號狀態',
+      '建立時間',
+      '最後登入時間'
+    ]];
+
+    // 步驟 3: 處理每位使用者的資料
+    for (var i = 0; i < allUsers.length; i++) {
+      var user = allUsers[i];
+      
+      var familyName = (user.name && user.name.familyName) ? user.name.familyName : 'N/A';
+      var givenName = (user.name && user.name.givenName) ? user.name.givenName : 'N/A';
+      var orgUnitPath = user.orgUnitPath || '/';
+      
+      // 【新增】從 organizations 陣列中取得職稱資訊
+      var employeeTitle = 'N/A';
+      if (user.organizations && user.organizations.length > 0) {
+        // 取得第一個組織的職稱，如果有多個組織，取主要的那個
+        for (var j = 0; j < user.organizations.length; j++) {
+          var org = user.organizations[j];
+          if (org.title) {
+            employeeTitle = org.title;
+            break; // 找到第一個有職稱的組織就停止
+          }
+        }
+      }
+      
+      var status = user.suspended ? '已停用' : '啟用中';
+      
+      // 格式化建立時間
+      var creationTime = 'N/A';
+      if (user.creationTime) {
+        var createdDate = new Date(user.creationTime);
+        creationTime = createdDate.toLocaleString('zh-TW', { timeZone: Session.getScriptTimeZone() });
+      }
+      
+      // 格式化最後登入時間
+      var lastLoginTime = 'N/A';
+      if (user.lastLoginTime) {
+        var loginDate = new Date(user.lastLoginTime);
+        if (loginDate.getFullYear() > 1970) {
+          lastLoginTime = loginDate.toLocaleString('zh-TW', { timeZone: Session.getScriptTimeZone() });
+        } else {
+          lastLoginTime = '從未登入';
+        }
+      } else {
+        lastLoginTime = '從未登入';
+      }
+
+      // 將 Employee Title 欄位加入到輸出資料中（在機構單位路徑後面）
+      outputData.push([
+        user.primaryEmail,
+        familyName,
+        givenName,
+        orgUnitPath,
+        employeeTitle,
+        status,
+        creationTime,
+        lastLoginTime
+      ]);
+    }
+
+    // 步驟 4: 建立新工作表並寫入資料
+    var spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+    var timestamp = new Date().toISOString().slice(0, 19).replace(/[-:]/g, '').replace('T', '_');
+    var sheetName = "所有使用者清單_" + timestamp;
+    
+    // 檢查是否有同名工作表並刪除
+    var existingSheet = spreadsheet.getSheetByName(sheetName);
+    if (existingSheet) {
+      spreadsheet.deleteSheet(existingSheet);
+    }
+    
+    var newSheet = spreadsheet.insertSheet(sheetName, 0);
+    
+    // 寫入資料
+    newSheet.getRange(1, 1, outputData.length, outputData[0].length).setValues(outputData);
+    
+    // 自動調整欄寬
+    newSheet.autoResizeColumns(1, outputData[0].length);
+    
+    // 凍結標題行
+    newSheet.setFrozenRows(1);
+    
+    // 設定標題行格式
+    var headerRange = newSheet.getRange(1, 1, 1, outputData[0].length);
+    headerRange.setBackground('#4285f4');
+    headerRange.setFontColor('white');
+    headerRange.setFontWeight('bold');
+    
+    // 切換到新工作表
+    newSheet.activate();
+
+    ui.alert('匯出成功！', 
+             allUsers.length + ' 位使用者的基本資料已成功匯出至新的工作表 "' + sheetName + '"。\n\n' +
+             '工作表包含使用者的基本資訊：Email、姓名、機構單位、職稱、狀態及登入時間。', 
+             ui.ButtonSet.OK);
+
+  } catch (e) {
+    var errorMsg = '處理過程中發生錯誤: ' + e.message;
+    logMessages.push(errorMsg);
+    ui.alert('錯誤', 
+             '無法完成使用者清單匯出。\n\n' +
+             '可能的原因：\n' +
+             '- API 權限不足\n' +
+             '- 網路連線問題\n' +
+             '- 資料量過大導致超時\n\n' +
+             '錯誤詳情: ' + e.message, 
+             ui.ButtonSet.OK);
+  } finally {
+    Logger.log(logMessages.join('\n'));
+    // 關閉處理中提示
+    SpreadsheetApp.getUi().showSidebar(HtmlService.createHtmlOutput('<b>完成！</b>').setTitle('進度'));
+  }
+}
+
+/**
+ * 根據試算表中的資料更新使用者的機構單位路徑和職稱。
+ * 讀取目前工作表中的資料，並更新對應使用者的 orgUnitPath 和 Employee Title。
+ */
+function updateUsersFromSheet() {
+  var ui = SpreadsheetApp.getUi();
+  
+  // 第一層確認
+  var confirmation = ui.alert(
+    '更新使用者資訊',
+    '此功能將讀取目前工作表的資料，並更新使用者的機構單位路徑和職稱。\n\n' +
+    '請確認：\n' +
+    '1. 目前工作表包含正確的使用者資料\n' +
+    '2. 資料格式正確（包含 Email、機構單位路徑、Employee Title 欄位）\n' +
+    '3. 您已經手動修改了需要更新的資料\n\n' +
+    '確定要繼續嗎？',
+    ui.ButtonSet.YES_NO
+  );
+  
+  if (confirmation != ui.Button.YES) {
+    ui.alert('操作已取消。');
+    return;
+  }
+
+  var sheet = SpreadsheetApp.getActiveSheet();
+  var dataRange = sheet.getDataRange();
+  var values = dataRange.getValues();
+
+  if (values.length < 2) {
+    ui.alert('錯誤', '工作表中沒有足夠的資料。請確保至少有標題行和一行資料。', ui.ButtonSet.OK);
+    return;
+  }
+
+  var headers = values[0];
+  var data = values.slice(1);
+
+  // 查找各欄位的索引
+  var emailCol = headers.indexOf('使用者 Email');
+  var orgUnitPathCol = headers.indexOf('機構單位路徑');
+  var employeeTitleCol = headers.indexOf('Employee Title');
+
+  // 檢查必要欄位是否存在
+  if (emailCol === -1) {
+    ui.alert('錯誤', '找不到「使用者 Email」欄位。請確保工作表包含正確的標題。', ui.ButtonSet.OK);
+    return;
+  }
+  
+  if (orgUnitPathCol === -1 && employeeTitleCol === -1) {
+    ui.alert('錯誤', '找不到「機構單位路徑」或「Employee Title」欄位。請確保工作表包含至少其中一個欄位。', ui.ButtonSet.OK);
+    return;
+  }
+
+  // 最後確認
+  var finalConfirmation = ui.alert(
+    '最終確認',
+    '即將處理 ' + data.length + ' 位使用者的資料。\n\n' +
+    '此操作將會：\n' +
+    (orgUnitPathCol !== -1 ? '• 更新機構單位路徑\n' : '') +
+    (employeeTitleCol !== -1 ? '• 更新職稱資訊\n' : '') +
+    '\n確定要執行嗎？',
+    ui.ButtonSet.YES_NO
+  );
+  
+  if (finalConfirmation != ui.Button.YES) {
+    ui.alert('操作已取消。');
+    return;
+  }
+
+  ui.showSidebar(HtmlService.createHtmlOutput('<b>正在更新使用者資料，請稍候...</b>').setTitle('處理中'));
+
+  var logMessages = ['開始更新使用者資料...'];
+  var successCount = 0;
+  var failCount = 0;
+  var skipCount = 0;
+
+  for (var i = 0; i < data.length; i++) {
+    var row = data[i];
+    var email = String(row[emailCol] || '').trim();
+    
+    if (!email) {
+      skipCount++;
+      continue; // 如果 Email 為空，直接跳過此行
+    }
+
+    var logPrefix = '第 ' + (i + 2) + ' 行 (' + email + '): ';
+    
+    try {
+      // 檢查使用者是否存在
+      var user;
+      try {
+        user = AdminDirectory.Users.get(email, {fields: "primaryEmail,orgUnitPath,organizations"});
+      } catch (e) {
+        logMessages.push(logPrefix + '使用者不存在，跳過。');
+        skipCount++;
+        continue;
+      }
+
+      var needsUpdate = false;
+      var userObj = {};
+
+      // 處理機構單位路徑更新
+      if (orgUnitPathCol !== -1) {
+        var newOrgUnitPath = String(row[orgUnitPathCol] || '').trim();
+        if (newOrgUnitPath && newOrgUnitPath !== user.orgUnitPath) {
+          userObj.orgUnitPath = newOrgUnitPath;
+          needsUpdate = true;
+          logMessages.push(logPrefix + '機構單位路徑將從 "' + user.orgUnitPath + '" 更新為 "' + newOrgUnitPath + '"');
+        }
+      }
+
+      // 處理職稱更新
+      if (employeeTitleCol !== -1) {
+        var newEmployeeTitle = String(row[employeeTitleCol] || '').trim();
+        
+        // 取得目前的職稱
+        var currentTitle = '';
+        if (user.organizations && user.organizations.length > 0) {
+          for (var j = 0; j < user.organizations.length; j++) {
+            if (user.organizations[j].title) {
+              currentTitle = user.organizations[j].title;
+              break;
+            }
+          }
+        }
+
+        // 比較職稱是否需要更新
+        if (newEmployeeTitle !== currentTitle) {
+          // 準備 organizations 資料結構
+          if (newEmployeeTitle) {
+            userObj.organizations = [{
+              title: newEmployeeTitle,
+              primary: true,
+              type: 'work'
+            }];
+          } else {
+            // 如果新職稱為空，清除職稱
+            userObj.organizations = [];
+          }
+          needsUpdate = true;
+          logMessages.push(logPrefix + '職稱將從 "' + currentTitle + '" 更新為 "' + newEmployeeTitle + '"');
+        }
+      }
+
+      // 執行更新
+      if (needsUpdate) {
+        AdminDirectory.Users.update(userObj, email);
+        logMessages.push(logPrefix + '使用者資料已成功更新。');
+        successCount++;
+      } else {
+        logMessages.push(logPrefix + '無需更新，資料相同。');
+        skipCount++;
+      }
+
+      // 避免 API 速率限制
+      if (i % 10 === 9) {
+        Utilities.sleep(100);
+      }
+
+    } catch (e) {
+      logMessages.push(logPrefix + '更新時發生錯誤: ' + e.message);
+      failCount++;
+    }
+  }
+
+  var resultMsg = '使用者資料更新完成！\n\n' +
+                  '成功更新: ' + successCount + ' 位使用者\n' +
+                  '跳過/無需更新: ' + skipCount + ' 位使用者\n' +
+                  '失敗/錯誤: ' + failCount + ' 位使用者\n\n' +
+                  '詳細日誌請查看 Apps Script 編輯器中的「執行作業」。\n\n' +
+                  '--- 部分日誌預覽 ---\n' + 
+                  logMessages.slice(0, 15).join('\n') + 
+                  (logMessages.length > 15 ? '\n...(更多日誌省略)' : '');
+
+  ui.alert('更新結果', resultMsg, ui.ButtonSet.OK);
+  Logger.log('--- 完整更新日誌 ---\n' + logMessages.join('\n'));
+  
+  // 關閉處理中提示
+  SpreadsheetApp.getUi().showSidebar(HtmlService.createHtmlOutput('<b>更新完成！</b>').setTitle('進度'));
 }
 
