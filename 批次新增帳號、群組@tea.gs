@@ -10,7 +10,7 @@ function onOpen() {
       .addItem('匯出所有機構單位 (含人數)', 'exportOUsAndUserCounts')
       .addSeparator()
       .addItem('1.匯出全部@tea 清單', 'exportAllUsers')
-      .addItem('2.依據匯出sheet 更新使用者機構單位與職稱', 'updateUsersFromSheet') // 【新增這一行】
+      .addItem('2.依據匯出sheet 只更新使用者機構單位與職稱', 'updateUsersFromSheet') // 【新增這一行】
       .addToUi();
 }
 
