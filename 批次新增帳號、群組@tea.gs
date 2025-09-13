@@ -4,13 +4,13 @@
 function onOpen() {
   var ui = SpreadsheetApp.getUi();
   ui.createMenu('管理帳號與群組')
-      .addItem('依試算表資料批次處理', 'processUsersAndGroups_V2')
+      .addItem('依[新建更新]表批次處理', 'processUsersAndGroups_V2')
+      .addSeparator()
+      .addItem('1.匯出[全部@tea清單]"', 'exportAllUsers')
+      .addItem('2.依據匯出sheet 只更新使用者姓、名、機構單位、職稱', 'updateUsersFromSheet') // 【新增這一行】
       .addSeparator()
       .addItem('查詢/匯出群組成員 (互動式)', 'showGroupManagementSidebar')
       .addItem('匯出所有機構單位 (含人數)', 'exportOUsAndUserCounts')
-      .addSeparator()
-      .addItem('1.匯出全部@tea 清單', 'exportAllUsers')
-      .addItem('2.依據匯出sheet 只更新使用者機構單位與職稱', 'updateUsersFromSheet') // 【新增這一行】
       .addToUi();
 }
 
@@ -703,7 +703,7 @@ function exportAllUsers() {
     // 步驟 4: 建立新工作表並寫入資料
     var spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
     var timestamp = new Date().toISOString().slice(0, 19).replace(/[-:]/g, '').replace('T', '_');
-    var sheetName = "所有使用者清單_" + timestamp;
+    var sheetName = "[全部@tea清單]" + timestamp;
     
     // 檢查是否有同名工作表並刪除
     var existingSheet = spreadsheet.getSheetByName(sheetName);
@@ -764,10 +764,10 @@ function updateUsersFromSheet() {
   // 第一層確認
   var confirmation = ui.alert(
     '更新使用者資訊',
-    '此功能將讀取目前工作表的資料，並更新使用者的機構單位路徑和職稱。\n\n' +
+    '此功能將讀取目前工作表的資料，並更新使用者的姓名、機構單位路徑和職稱。\n\n' +
     '請確認：\n' +
     '1. 目前工作表包含正確的使用者資料\n' +
-    '2. 資料格式正確（包含 Email、機構單位路徑、Employee Title 欄位）\n' +
+    '2. 資料格式正確（包含 Email、姓、名、機構單位路徑、Employee Title 欄位）\n' +
     '3. 您已經手動修改了需要更新的資料\n\n' +
     '確定要繼續嗎？',
     ui.ButtonSet.YES_NO
@@ -792,6 +792,8 @@ function updateUsersFromSheet() {
 
   // 查找各欄位的索引
   var emailCol = headers.indexOf('使用者 Email');
+  var familyNameCol = headers.indexOf('姓 (Family Name)');
+  var givenNameCol = headers.indexOf('名 (Given Name)');
   var orgUnitPathCol = headers.indexOf('機構單位路徑');
   var employeeTitleCol = headers.indexOf('Employee Title');
 
@@ -801,19 +803,24 @@ function updateUsersFromSheet() {
     return;
   }
   
-  if (orgUnitPathCol === -1 && employeeTitleCol === -1) {
-    ui.alert('錯誤', '找不到「機構單位路徑」或「Employee Title」欄位。請確保工作表包含至少其中一個欄位。', ui.ButtonSet.OK);
+  if (familyNameCol === -1 && givenNameCol === -1 && orgUnitPathCol === -1 && employeeTitleCol === -1) {
+    ui.alert('錯誤', '找不到任何可更新的欄位（姓、名、機構單位路徑、Employee Title）。請確保工作表包含至少其中一個欄位。', ui.ButtonSet.OK);
     return;
   }
 
   // 最後確認
+  var confirmationFields = [];
+  if (familyNameCol !== -1) confirmationFields.push('• 更新姓氏');
+  if (givenNameCol !== -1) confirmationFields.push('• 更新名字');
+  if (orgUnitPathCol !== -1) confirmationFields.push('• 更新機構單位路徑');
+  if (employeeTitleCol !== -1) confirmationFields.push('• 更新職稱資訊');
+
   var finalConfirmation = ui.alert(
     '最終確認',
     '即將處理 ' + data.length + ' 位使用者的資料。\n\n' +
     '此操作將會：\n' +
-    (orgUnitPathCol !== -1 ? '• 更新機構單位路徑\n' : '') +
-    (employeeTitleCol !== -1 ? '• 更新職稱資訊\n' : '') +
-    '\n確定要執行嗎？',
+    confirmationFields.join('\n') +
+    '\n\n確定要執行嗎？',
     ui.ButtonSet.YES_NO
   );
   
@@ -844,7 +851,7 @@ function updateUsersFromSheet() {
       // 檢查使用者是否存在
       var user;
       try {
-        user = AdminDirectory.Users.get(email, {fields: "primaryEmail,orgUnitPath,organizations"});
+        user = AdminDirectory.Users.get(email, {fields: "primaryEmail,name,orgUnitPath,organizations"});
       } catch (e) {
         logMessages.push(logPrefix + '使用者不存在，跳過。');
         skipCount++;
@@ -853,6 +860,46 @@ function updateUsersFromSheet() {
 
       var needsUpdate = false;
       var userObj = {};
+
+      // 處理姓名更新
+      var nameObj = {};
+      var nameUpdated = false;
+
+      if (familyNameCol !== -1) {
+        var newFamilyName = String(row[familyNameCol] || '').trim();
+        var currentFamilyName = (user.name && user.name.familyName) ? user.name.familyName : '';
+        
+        if (newFamilyName && newFamilyName !== currentFamilyName) {
+          nameObj.familyName = newFamilyName;
+          nameUpdated = true;
+          logMessages.push(logPrefix + '姓氏將從 "' + currentFamilyName + '" 更新為 "' + newFamilyName + '"');
+        }
+      }
+
+      if (givenNameCol !== -1) {
+        var newGivenName = String(row[givenNameCol] || '').trim();
+        var currentGivenName = (user.name && user.name.givenName) ? user.name.givenName : '';
+        
+        if (newGivenName && newGivenName !== currentGivenName) {
+          nameObj.givenName = newGivenName;
+          nameUpdated = true;
+          logMessages.push(logPrefix + '名字將從 "' + currentGivenName + '" 更新為 "' + newGivenName + '"');
+        }
+      }
+
+      if (nameUpdated) {
+        // 保留現有的姓名資料，只更新有變化的部分
+        if (user.name) {
+          if (!nameObj.familyName && user.name.familyName) {
+            nameObj.familyName = user.name.familyName;
+          }
+          if (!nameObj.givenName && user.name.givenName) {
+            nameObj.givenName = user.name.givenName;
+          }
+        }
+        userObj.name = nameObj;
+        needsUpdate = true;
+      }
 
       // 處理機構單位路徑更新
       if (orgUnitPathCol !== -1) {
