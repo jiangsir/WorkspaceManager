@@ -606,14 +606,13 @@ function exportAllUsers() {
   var processedCount = 0;
 
   try {
-    // 步驟 1: 獲取所有使用者 - 【修改】使用 organizations 欄位來取得 title
+    // 步驟 1: 獲取所有使用者
     var pageToken;
     do {
       var page = AdminDirectory.Users.list({
         customer: 'my_customer',
         maxResults: 500,
         pageToken: pageToken,
-        // 【修改】加入 organizations 欄位來取得職稱資訊
         fields: 'nextPageToken,users(primaryEmail,name,orgUnitPath,organizations,suspended,creationTime,lastLoginTime)'
       });
       
@@ -632,7 +631,7 @@ function exportAllUsers() {
 
     logMessages.push('使用者資料讀取完成，共 ' + allUsers.length + ' 位使用者，開始整理資料...');
 
-    // 步驟 2: 準備要寫入工作表的資料 - 在機構單位路徑後加入 Employee Title 欄位
+    // 步驟 2: 準備要寫入工作表的資料
     var outputData = [[
       '使用者 Email',
       '姓 (Family Name)', 
@@ -641,7 +640,8 @@ function exportAllUsers() {
       'Employee Title',
       '帳號狀態',
       '建立時間',
-      '最後登入時間'
+      '最後登入時間',
+      '是否需要更新'
     ]];
 
     // 步驟 3: 處理每位使用者的資料
@@ -652,29 +652,25 @@ function exportAllUsers() {
       var givenName = (user.name && user.name.givenName) ? user.name.givenName : 'N/A';
       var orgUnitPath = user.orgUnitPath || '/';
       
-      // 【新增】從 organizations 陣列中取得職稱資訊
       var employeeTitle = 'N/A';
       if (user.organizations && user.organizations.length > 0) {
-        // 取得第一個組織的職稱，如果有多個組織，取主要的那個
         for (var j = 0; j < user.organizations.length; j++) {
           var org = user.organizations[j];
           if (org.title) {
             employeeTitle = org.title;
-            break; // 找到第一個有職稱的組織就停止
+            break;
           }
         }
       }
       
       var status = user.suspended ? '已停用' : '啟用中';
       
-      // 格式化建立時間
       var creationTime = 'N/A';
       if (user.creationTime) {
         var createdDate = new Date(user.creationTime);
         creationTime = createdDate.toLocaleString('zh-TW', { timeZone: Session.getScriptTimeZone() });
       }
       
-      // 格式化最後登入時間
       var lastLoginTime = 'N/A';
       if (user.lastLoginTime) {
         var loginDate = new Date(user.lastLoginTime);
@@ -687,7 +683,6 @@ function exportAllUsers() {
         lastLoginTime = '從未登入';
       }
 
-      // 將 Employee Title 欄位加入到輸出資料中（在機構單位路徑後面）
       outputData.push([
         user.primaryEmail,
         familyName,
@@ -696,7 +691,8 @@ function exportAllUsers() {
         employeeTitle,
         status,
         creationTime,
-        lastLoginTime
+        lastLoginTime,
+        '無需更新' // 先暫時設為固定值
       ]);
     }
 
@@ -705,7 +701,6 @@ function exportAllUsers() {
     var timestamp = new Date().toISOString().slice(0, 19).replace(/[-:]/g, '').replace('T', '_');
     var sheetName = "[全部@tea清單]" + timestamp;
     
-    // 檢查是否有同名工作表並刪除
     var existingSheet = spreadsheet.getSheetByName(sheetName);
     if (existingSheet) {
       spreadsheet.deleteSheet(existingSheet);
@@ -713,27 +708,96 @@ function exportAllUsers() {
     
     var newSheet = spreadsheet.insertSheet(sheetName, 0);
     
-    // 寫入資料
+    // 先寫入資料（不包含公式）
     newSheet.getRange(1, 1, outputData.length, outputData[0].length).setValues(outputData);
     
-    // 自動調整欄寬
-    newSheet.autoResizeColumns(1, outputData[0].length);
+    // 步驟 5: 在工作表底部建立原始值參考區域
+    var referenceStartRow = outputData.length + 3;
+    var referenceData = [['=== 原始值參考區域（系統用，請勿修改）===', '', '', '', '']];
     
-    // 凍結標題行
+    // 複製B、C、D、E欄的原始值到參考區域
+    for (var i = 1; i < outputData.length; i++) { // 從第2行開始（跳過標題）
+      referenceData.push([
+        outputData[i][1], // 姓 (Family Name)
+        outputData[i][2], // 名 (Given Name)  
+        outputData[i][3], // 機構單位路徑
+        outputData[i][4], // Employee Title
+        ''
+      ]);
+    }
+    
+    // 寫入參考區域
+    newSheet.getRange(referenceStartRow, 1, referenceData.length, 5).setValues(referenceData);
+    
+    // 隱藏參考區域
+    if (referenceData.length > 1) {
+      newSheet.hideRows(referenceStartRow, referenceData.length);
+    }
+    
+    // 步驟 6: 設定檢測公式（現在參考區域已經建立完成）
+    for (var rowIndex = 2; rowIndex <= outputData.length; rowIndex++) {
+      var refRowIndex = referenceStartRow + (rowIndex - 1); // 對應的參考行
+      
+      var detectionFormula = 
+        '=IF(OR(' +
+        'B' + rowIndex + '<>$A$' + refRowIndex + ',' +
+        'C' + rowIndex + '<>$B$' + refRowIndex + ',' +
+        'D' + rowIndex + '<>$C$' + refRowIndex + ',' +
+        'E' + rowIndex + '<>$D$' + refRowIndex +
+        '),"需要更新","無需更新")';
+      
+      newSheet.getRange(rowIndex, 9).setFormula(detectionFormula);
+    }
+    
+    // 步驟 7: 設定格式
+    newSheet.autoResizeColumns(1, outputData[0].length);
     newSheet.setFrozenRows(1);
     
-    // 設定標題行格式
     var headerRange = newSheet.getRange(1, 1, 1, outputData[0].length);
     headerRange.setBackground('#4285f4');
     headerRange.setFontColor('white');
     headerRange.setFontWeight('bold');
     
-    // 切換到新工作表
+    // 設定已停用帳號為紅色
+    for (var rowIndex = 2; rowIndex <= outputData.length; rowIndex++) {
+      var statusCell = newSheet.getRange(rowIndex, 6);
+      if (statusCell.getValue() === '已停用') {
+        statusCell.setFontColor('#ff0000');
+      }
+    }
+    
+    // 設定檢測欄位條件格式
+    var detectionRange = newSheet.getRange(2, 9, outputData.length - 1, 1);
+    
+    var needUpdateRule = SpreadsheetApp.newConditionalFormatRule()
+      .whenTextEqualTo("需要更新")
+      .setBackground("#FFA500")
+      .setFontColor("#FFFFFF")
+      .setRanges([detectionRange])
+      .build();
+    
+    var noUpdateRule = SpreadsheetApp.newConditionalFormatRule()
+      .whenTextEqualTo("無需更新")
+      .setBackground("#90EE90")
+      .setFontColor("#000000")
+      .setRanges([detectionRange])
+      .build();
+    
+    var rules = newSheet.getConditionalFormatRules();
+    rules.push(needUpdateRule);
+    rules.push(noUpdateRule);
+    newSheet.setConditionalFormatRules(rules);
+    
     newSheet.activate();
 
     ui.alert('匯出成功！', 
              allUsers.length + ' 位使用者的基本資料已成功匯出至新的工作表 "' + sheetName + '"。\n\n' +
-             '工作表包含使用者的基本資訊：Email、姓名、機構單位、職稱、狀態及登入時間。', 
+             '★ 智能檢測功能已啟用：\n' +
+             '• I 欄會自動檢測 B、C、D、E 欄是否被修改\n' +
+             '• 初始狀態：全部為「無需更新」（綠色背景）\n' +
+             '• 修改資料後會自動變為「需要更新」（橙色背景）\n' +
+             '• 原始值已儲存在隱藏的參考區域中\n\n' +
+             '請修改完資料後，使用「依據匯出sheet 只更新使用者姓、名、機構單位、職稱」功能。', 
              ui.ButtonSet.OK);
 
   } catch (e) {
@@ -741,15 +805,10 @@ function exportAllUsers() {
     logMessages.push(errorMsg);
     ui.alert('錯誤', 
              '無法完成使用者清單匯出。\n\n' +
-             '可能的原因：\n' +
-             '- API 權限不足\n' +
-             '- 網路連線問題\n' +
-             '- 資料量過大導致超時\n\n' +
              '錯誤詳情: ' + e.message, 
              ui.ButtonSet.OK);
   } finally {
     Logger.log(logMessages.join('\n'));
-    // 關閉處理中提示
     SpreadsheetApp.getUi().showSidebar(HtmlService.createHtmlOutput('<b>完成！</b>').setTitle('進度'));
   }
 }
@@ -757,6 +816,7 @@ function exportAllUsers() {
 /**
  * 根據試算表中的資料更新使用者的機構單位路徑和職稱。
  * 讀取目前工作表中的資料，並更新對應使用者的 orgUnitPath 和 Employee Title。
+ * 只處理 I 欄標記為「需要更新」的行。
  */
 function updateUsersFromSheet() {
   var ui = SpreadsheetApp.getUi();
@@ -765,6 +825,7 @@ function updateUsersFromSheet() {
   var confirmation = ui.alert(
     '更新使用者資訊',
     '此功能將讀取目前工作表的資料，並更新使用者的姓名、機構單位路徑和職稱。\n\n' +
+    '★ 智能更新：只會處理 I 欄標記為「需要更新」的使用者。\n\n' +
     '請確認：\n' +
     '1. 目前工作表包含正確的使用者資料\n' +
     '2. 資料格式正確（包含 Email、姓、名、機構單位路徑、Employee Title 欄位）\n' +
@@ -796,6 +857,7 @@ function updateUsersFromSheet() {
   var givenNameCol = headers.indexOf('名 (Given Name)');
   var orgUnitPathCol = headers.indexOf('機構單位路徑');
   var employeeTitleCol = headers.indexOf('Employee Title');
+  var updateStatusCol = headers.indexOf('是否需要更新'); // 新增：檢測欄位的索引
 
   // 檢查必要欄位是否存在
   if (emailCol === -1) {
@@ -808,7 +870,33 @@ function updateUsersFromSheet() {
     return;
   }
 
-  // 最後確認
+  // 篩選出需要更新的行
+  var rowsToUpdate = [];
+  for (var i = 0; i < data.length; i++) {
+    var row = data[i];
+    var email = String(row[emailCol] || '').trim();
+    var updateStatus = updateStatusCol !== -1 ? String(row[updateStatusCol] || '').trim() : '';
+    
+    // 如果有檢測欄位，只處理標記為「需要更新」的行；如果沒有檢測欄位，處理所有行
+    if (email && (updateStatusCol === -1 || updateStatus === '需要更新')) {
+      rowsToUpdate.push({
+        index: i,
+        rowNumber: i + 2, // 實際行號（包含標題行）
+        data: row
+      });
+    }
+  }
+
+  if (rowsToUpdate.length === 0) {
+    ui.alert('提示', '沒有找到需要更新的使用者。\n\n' + 
+             (updateStatusCol !== -1 ? 
+              '所有使用者的 I 欄都顯示「無需更新」，或沒有有效的 Email。' : 
+              '沒有找到有效的 Email。'), 
+             ui.ButtonSet.OK);
+    return;
+  }
+
+  // 確認要處理的行數
   var confirmationFields = [];
   if (familyNameCol !== -1) confirmationFields.push('• 更新姓氏');
   if (givenNameCol !== -1) confirmationFields.push('• 更新名字');
@@ -817,7 +905,8 @@ function updateUsersFromSheet() {
 
   var finalConfirmation = ui.alert(
     '最終確認',
-    '即將處理 ' + data.length + ' 位使用者的資料。\n\n' +
+    '即將處理 ' + rowsToUpdate.length + ' 位使用者的資料' + 
+    (updateStatusCol !== -1 ? '（僅處理標記為「需要更新」的使用者）' : '') + '。\n\n' +
     '此操作將會：\n' +
     confirmationFields.join('\n') +
     '\n\n確定要執行嗎？',
@@ -836,16 +925,12 @@ function updateUsersFromSheet() {
   var failCount = 0;
   var skipCount = 0;
 
-  for (var i = 0; i < data.length; i++) {
-    var row = data[i];
+  for (var i = 0; i < rowsToUpdate.length; i++) {
+    var rowInfo = rowsToUpdate[i];
+    var row = rowInfo.data;
     var email = String(row[emailCol] || '').trim();
     
-    if (!email) {
-      skipCount++;
-      continue; // 如果 Email 為空，直接跳過此行
-    }
-
-    var logPrefix = '第 ' + (i + 2) + ' 行 (' + email + '): ';
+    var logPrefix = '第 ' + rowInfo.rowNumber + ' 行 (' + email + '): ';
     
     try {
       // 檢查使用者是否存在
@@ -949,8 +1034,13 @@ function updateUsersFromSheet() {
         AdminDirectory.Users.update(userObj, email);
         logMessages.push(logPrefix + '使用者資料已成功更新。');
         successCount++;
+        
+        // 更新工作表中的檢測欄位狀態為「已更新」
+        if (updateStatusCol !== -1) {
+          sheet.getRange(rowInfo.rowNumber, updateStatusCol + 1).setValue('已更新');
+        }
       } else {
-        logMessages.push(logPrefix + '無需更新，資料相同。');
+        logMessages.push(logPrefix + '實際檢查後無需更新，資料相同。');
         skipCount++;
       }
 
@@ -966,6 +1056,8 @@ function updateUsersFromSheet() {
   }
 
   var resultMsg = '使用者資料更新完成！\n\n' +
+                  '處理了 ' + rowsToUpdate.length + ' 位使用者' + 
+                  (updateStatusCol !== -1 ? '（僅處理標記為「需要更新」的使用者）' : '') + '：\n' +
                   '成功更新: ' + successCount + ' 位使用者\n' +
                   '跳過/無需更新: ' + skipCount + ' 位使用者\n' +
                   '失敗/錯誤: ' + failCount + ' 位使用者\n\n' +
