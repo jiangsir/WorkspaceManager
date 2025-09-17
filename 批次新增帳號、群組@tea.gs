@@ -7,9 +7,6 @@ function onOpen() {
     .addItem('1. 匯出[新建範本tea]sheet 範本', 'exportNewUserTemplate')
     .addItem('2. 依[新建範本tea]批次新增(不更動現有資料)', 'processUsersAndGroups_V2')
     .addSeparator()
-    .addItem('1.匯出[全部@tea清單]"', 'exportAllUsers')
-    .addItem('2.依據匯出sheet 只更新使用者姓、名、機構單位、職稱', 'updateUsersFromSheet')
-    .addSeparator()
     .addItem('1.匯出[群組成員] (互動式)', 'showGroupManagementSidebar')
     .addItem('2.依[群組成員]更新群組', 'updateGroupMembersFromSheet')
     .addSeparator()
@@ -809,26 +806,26 @@ function getGroupMembersForSidebar(groupEmail) {
             lastLogin = '從未登入';
           }
 
-          // 獲取使用者所屬的所有群組
+          // 獲取使用者所屬的所有群組 Email（修改：改為獲取群組 Email 而非群組名稱）
           try {
-            var memberGroups = [];
+            var memberGroupEmails = [];
             var groupPageToken;
             do {
               var groupPage = AdminDirectory.Groups.list({
                 userKey: member.email,
                 maxResults: 200,
                 pageToken: groupPageToken,
-                fields: 'nextPageToken,groups(name)'
+                fields: 'nextPageToken,groups(email)' // 修改：改為獲取 email 欄位
               });
               if (groupPage.groups) {
                 for (var g = 0; g < groupPage.groups.length; g++) {
-                  memberGroups.push(groupPage.groups[g].name);
+                  memberGroupEmails.push(groupPage.groups[g].email); // 修改：推送群組 Email
                 }
               }
               groupPageToken = groupPage.nextPageToken;
             } while (groupPageToken);
 
-            userGroups = memberGroups.length > 0 ? memberGroups.join(', ') : '無群組';
+            userGroups = memberGroupEmails.length > 0 ? memberGroupEmails.join(', ') : '無群組'; // 修改：使用群組 Email
           } catch (groupError) {
             userGroups = '無法獲取';
             Logger.log('無法獲取使用者 ' + member.email + ' 的群組資訊: ' + groupError.message);
@@ -1186,250 +1183,6 @@ function exportOUsAndUserCounts() {
 }
 
 /**
- * 匯出整個 tea 網域中的所有使用者資料到一個新的工作表。
- * 包含使用者的基本資訊、機構單位、最後登入時間等詳細資訊。
- */
-function exportAllUsers() {
-  var ui = SpreadsheetApp.getUi();
-
-  // 第一層確認
-  var confirmation = ui.alert(
-    '匯出所有使用者',
-    '您即將匯出整個 tea 網域的所有使用者清單。\n\n此操作可能需要較長時間，確定要繼續嗎？',
-    ui.ButtonSet.YES_NO
-  );
-
-  if (confirmation != ui.Button.YES) {
-    ui.alert('操作已取消。');
-    return;
-  }
-
-  ui.showSidebar(HtmlService.createHtmlOutput('<b>正在讀取所有使用者資料，這可能需要幾分鐘時間，請稍候...</b>').setTitle('處理中'));
-
-  var logMessages = ['開始讀取所有使用者...'];
-  var allUsers = [];
-  var processedCount = 0;
-
-  try {
-    // 步驟 1: 獲取所有使用者
-    var pageToken;
-    do {
-      var page = AdminDirectory.Users.list({
-        customer: 'my_customer',
-        maxResults: 500,
-        pageToken: pageToken,
-        fields: 'nextPageToken,users(primaryEmail,name,orgUnitPath,organizations,suspended,creationTime,lastLoginTime)'
-      });
-
-      if (page.users) {
-        allUsers = allUsers.concat(page.users);
-        processedCount += page.users.length;
-        logMessages.push('已讀取 ' + processedCount + ' 位使用者...');
-      }
-      pageToken = page.nextPageToken;
-    } while (pageToken);
-
-    if (allUsers.length === 0) {
-      ui.alert('結果', '未找到任何使用者。', ui.ButtonSet.OK);
-      return;
-    }
-
-    logMessages.push('使用者資料讀取完成，共 ' + allUsers.length + ' 位使用者，開始整理資料...');
-
-    // 步驟 2: 準備要寫入工作表的資料
-    var outputData = [[
-      '使用者 Email',
-      '姓 (Family Name)',
-      '名 (Given Name)',
-      '機構單位路徑',
-      'Employee Title',
-      '帳號狀態',
-      '建立時間',
-      '最後登入時間',
-      '是否需要更新'
-    ]];
-
-    // 步驟 3: 處理每位使用者的資料
-    for (var i = 0; i < allUsers.length; i++) {
-      var user = allUsers[i];
-
-      var familyName = (user.name && user.name.familyName) ? user.name.familyName : 'N/A';
-      var givenName = (user.name && user.name.givenName) ? user.name.givenName : 'N/A';
-      var orgUnitPath = user.orgUnitPath || '/';
-
-      var employeeTitle = 'N/A';
-      if (user.organizations && user.organizations.length > 0) {
-        for (var j = 0; j < user.organizations.length; j++) {
-          var org = user.organizations[j];
-          if (org.title) {
-            employeeTitle = org.title;
-            break;
-          }
-        }
-      }
-
-      var status = user.suspended ? '已停用' : '啟用中';
-
-      var creationTime = 'N/A';
-      if (user.creationTime) {
-        var createdDate = new Date(user.creationTime);
-        creationTime = createdDate.toLocaleString('zh-TW', { timeZone: Session.getScriptTimeZone() });
-      }
-
-      var lastLoginTime = 'N/A';
-      if (user.lastLoginTime) {
-        var loginDate = new Date(user.lastLoginTime);
-        if (loginDate.getFullYear() > 1970) {
-          lastLoginTime = loginDate.toLocaleString('zh-TW', { timeZone: Session.getScriptTimeZone() });
-        } else {
-          lastLoginTime = '從未登入';
-        }
-      } else {
-        lastLoginTime = '從未登入';
-      }
-
-      outputData.push([
-        user.primaryEmail,
-        familyName,
-        givenName,
-        orgUnitPath,
-        employeeTitle,
-        status,
-        creationTime,
-        lastLoginTime,
-        '無需更新'
-      ]);
-    }
-
-    // 步驟 4: 建立新工作表並寫入資料
-    var spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
-    var timestamp = new Date().toISOString().slice(0, 19).replace(/[-:]/g, '').replace('T', '_');
-    var sheetName = "[全部@tea清單]" + timestamp;
-
-    var existingSheet = spreadsheet.getSheetByName(sheetName);
-    if (existingSheet) {
-      spreadsheet.deleteSheet(existingSheet);
-    }
-
-    var newSheet = spreadsheet.insertSheet(sheetName, 0);
-
-    // 先寫入資料（不包含公式）
-    newSheet.getRange(1, 1, outputData.length, outputData[0].length).setValues(outputData);
-
-    // 步驟 5: 在工作表底部建立原始值參考區域
-    var referenceStartRow = outputData.length + 3;
-    var referenceData = [['=== 原始值參考區域（系統用，請勿修改）===', '', '', '']]; // 修正：改為 4 個元素
-
-    // 複製 B、C、D、E 欄的原始值到參考區域
-    for (var i = 1; i < outputData.length; i++) { // 從第2行開始（跳過標題）
-      referenceData.push([
-        outputData[i][1], // B欄：姓 (Family Name)
-        outputData[i][2], // C欄：名 (Given Name)  
-        outputData[i][3], // D欄：機構單位路徑
-        outputData[i][4]  // E欄：Employee Title
-      ]);
-    }
-
-    // 寫入參考區域
-    newSheet.getRange(referenceStartRow, 1, referenceData.length, 4).setValues(referenceData); // 修正：改為 4 欄
-
-    // 隱藏參考區域
-    if (referenceData.length > 1) {
-      newSheet.hideRows(referenceStartRow, referenceData.length);
-    }
-
-    // 步驟 6: 設定檢測公式（檢測 B、C、D、E 欄的變化）
-    for (var rowIndex = 2; rowIndex <= outputData.length; rowIndex++) {
-      var refRowIndex = referenceStartRow + (rowIndex - 1); // 對應的參考行
-
-      var detectionFormula =
-        '=IF(OR(' +
-        'B' + rowIndex + '<>$A$' + refRowIndex + ',' +  // B欄：姓
-        'C' + rowIndex + '<>$B$' + refRowIndex + ',' +  // C欄：名
-        'D' + rowIndex + '<>$C$' + refRowIndex + ',' +  // D欄：機構單位路徑
-        'E' + rowIndex + '<>$D$' + refRowIndex +        // E欄：Employee Title
-        '),"需要更新","無需更新")';
-
-      newSheet.getRange(rowIndex, 9).setFormula(detectionFormula); // I欄（第9欄）
-    }
-
-    // 步驟 7: 設定格式（固定寬度 + 自動裁剪內容）
-    var columnWidths = {
-      1: 200,  // A欄：使用者 Email
-      2: 100,  // B欄：姓 (Family Name)
-      3: 100,  // C欄：名 (Given Name)
-      4: 180,  // D欄：機構單位路徑
-      5: 120,  // E欄：Employee Title
-      6: 80,   // F欄：帳號狀態
-      7: 150,  // G欄：建立時間
-      8: 150,  // H欄：最後登入時間
-      9: 120   // I欄：是否需要更新
-    };
-
-    // 設定固定欄位寬度
-    for (var col = 1; col <= 9; col++) {
-      if (columnWidths[col]) {
-        newSheet.setColumnWidth(col, columnWidths[col]);
-      }
-    }
-
-    // 設定所有資料範圍的自動裁剪（文字換行）
-    if (outputData.length > 1) {
-      var dataRange = newSheet.getRange(2, 1, outputData.length - 1, 9);
-      dataRange.setWrap(true); // 啟用自動換行以適應固定寬度
-      dataRange.setVerticalAlignment('top'); // 垂直對齊頂部
-    }
-
-    newSheet.setFrozenRows(1); // 凍結標題行
-
-    // 步驟 8: 設定「是否需要更新」欄位的條件格式
-    if (outputData.length > 1) {
-      var detectionRange = newSheet.getRange(2, 9, outputData.length - 1, 1); // I欄（第9欄）
-
-      var needUpdateRule = SpreadsheetApp.newConditionalFormatRule()
-        .whenTextEqualTo("需要更新")
-        .setBackground("#FFA500")
-        .setFontColor("#FFFFFF")
-        .setRanges([detectionRange])
-        .build();
-
-      var noUpdateRule = SpreadsheetApp.newConditionalFormatRule()
-        .whenTextEqualTo("無需更新")
-        .setBackground("#90EE90")
-        .setFontColor("#000000")
-        .setRanges([detectionRange])
-        .build();
-
-      var alreadyUpdatedRule = SpreadsheetApp.newConditionalFormatRule()
-        .whenTextEqualTo("已更新")
-        .setBackground("#87CEEB")
-        .setFontColor("#000000")
-        .setRanges([detectionRange])
-        .build();
-
-      var rules = newSheet.getConditionalFormatRules();
-      rules.push(needUpdateRule);
-      rules.push(noUpdateRule);
-      rules.push(alreadyUpdatedRule);
-      newSheet.setConditionalFormatRules(rules);
-    }
-
-    newSheet.activate();
-
-    ui.alert('匯出成功！', allUsers.length + ' 位使用者的資料已成功匯出至新的工作表 "' + sheetName + '"。', ui.ButtonSet.OK);
-
-  } catch (e) {
-    var errorMsg = '處理過程中發生嚴重錯誤: ' + e.message;
-    logMessages.push(errorMsg);
-    ui.alert('錯誤', '無法完成使用者匯出。\n\n錯誤詳情: ' + e.message, ui.ButtonSet.OK);
-  } finally {
-    Logger.log(logMessages.join('\n'));
-    // 關閉側邊欄的 "處理中" 提示
-    SpreadsheetApp.getUi().showSidebar(HtmlService.createHtmlOutput('<b>完成！</b>').setTitle('進度'));
-  }
-}
-
-/**
  * 根據試算表中的資料更新使用者的機構單位路徑和職稱。
  * 讀取目前工作表中的資料，並更新對應使用者的 orgUnitPath 和 Employee Title。
  * 只處理 I 欄標記為「需要更新」的行。
@@ -1703,11 +1456,12 @@ function updateGroupMembersFromSheet() {
     '更新群組成員歸屬',
     '此功能將讀取目前工作表的「所屬群組 (Groups)」欄位資料，並更新使用者實際所屬的群組。\n\n' +
     '★ 智能更新：只會處理 I 欄標記為「需要更新」的使用者。\n' +
-    '★ 自動跳過：巢狀群組（Nested Group）不會被處理。\n\n' +
+    '★ 自動跳過：巢狀群組（Nested Group）不會被處理。\n' +
+    '★ 群組格式：支援群組 Email 格式（推薦）和群組名稱格式。\n\n' +
     '請確認：\n' +
     '1. 目前工作表是群組成員匯出的工作表\n' +
     '2. 您已經手動修改了「所屬群組 (Groups)」欄位\n' +
-    '3. 群組名稱格式正確（用逗號分隔多個群組）\n\n' +
+    '3. 群組 Email 或群組名稱格式正確（用逗號分隔多個群組）\n\n' +
     '⚠️ 注意：此操作會完全替換使用者的群組歸屬！\n\n' +
     '確定要繼續嗎？',
     ui.ButtonSet.YES_NO
@@ -1776,6 +1530,7 @@ function updateGroupMembersFromSheet() {
     // 檢查是否為巢狀群組
     if (type === 'GROUP') {
       nestedGroupCount++;
+     
       continue; // 跳過巢狀群組
     }
 
@@ -1834,7 +1589,7 @@ function updateGroupMembersFromSheet() {
   var failCount = 0;
   var skipCount = 0;
   
-  // 建立群組名稱到群組Email的對應表
+  // 建立群組名稱到群組Email的對應表（保留以支援群組名稱格式）
   var groupNameToEmailMap = {};
   try {
     var allGroups = listAllGroups();
@@ -1867,20 +1622,32 @@ function updateGroupMembersFromSheet() {
         continue;
       }
 
-      // 解析新的群組列表
+      // 解析新的群組列表（修改：優先處理群組 Email，後備處理群組名稱）
       var newGroups = [];
       if (newGroupsText && newGroupsText !== '無群組' && newGroupsText !== 'N/A' && newGroupsText !== '無法獲取' && newGroupsText !== '不適用') {
-        var groupNames = newGroupsText.split(',').map(function(name) { return name.trim(); });
+        var groupIdentifiers = newGroupsText.split(',').map(function(identifier) { return identifier.trim(); });
         
-        for (var j = 0; j < groupNames.length; j++) {
-          var groupName = groupNames[j];
-          if (groupName && groupNameToEmailMap[groupName]) {
-            newGroups.push({
-              name: groupName,
-              email: groupNameToEmailMap[groupName]
-            });
-          } else if (groupName) {
-            logMessages.push(logPrefix + '警告：找不到群組 "' + groupName + '" 的 Email，將跳過此群組。');
+        for (var j = 0; j < groupIdentifiers.length; j++) {
+          var groupIdentifier = groupIdentifiers[j];
+          if (groupIdentifier) {
+            // 檢查是否為群組 Email 格式（包含 @ 符號）
+            if (groupIdentifier.indexOf('@') !== -1) {
+              // 直接使用群組 Email
+              newGroups.push({
+                identifier: groupIdentifier,
+                email: groupIdentifier
+              });
+              logMessages.push(logPrefix + '將使用群組 Email: ' + groupIdentifier);
+            } else if (groupNameToEmailMap[groupIdentifier]) {
+              // 使用群組名稱查找對應的 Email
+              newGroups.push({
+                identifier: groupIdentifier,
+                email: groupNameToEmailMap[groupIdentifier]
+              });
+              logMessages.push(logPrefix + '群組名稱 "' + groupIdentifier + '" 對應到 Email: ' + groupNameToEmailMap[groupIdentifier]);
+            } else {
+              logMessages.push(logPrefix + '警告：無法識別群組 "' + groupIdentifier + '"（既不是有效的群組 Email，也找不到對應的群組名稱），將跳過此群組。');
+            }
           }
         }
       }
@@ -1900,7 +1667,7 @@ function updateGroupMembersFromSheet() {
             currentGroups = currentGroups.concat(groupPage.groups);
           }
           groupPageToken = groupPage.nextPageToken;
-               } while (groupPageToken);
+        } while (groupPageToken);
       } catch (e) {
         logMessages.push(logPrefix + '無法獲取目前群組歸屬: ' + e.message);
       }
@@ -1936,11 +1703,11 @@ function updateGroupMembersFromSheet() {
           addCount++;
         } catch (addError) {
           if (addError.message.includes("Member already exists") || addError.message.includes("duplicate")) {
-            logMessages.push(logPrefix + '已是群組 "' + newGroups[k].name + '" 的成員。');
+            logMessages.push(logPrefix + '已是群組 "' + newGroups[k].identifier + '" 的成員。');
             addCount++; // 視為成功
           } else {
             addErrors++;
-            logMessages.push(logPrefix + '加入群組 "' + newGroups[k].name + '" 時失敗: ' + addError.message);
+            logMessages.push(logPrefix + '加入群組 "' + newGroups[k].identifier + '" 時失敗: ' + addError.message);
           }
         }
       }
@@ -1956,7 +1723,6 @@ function updateGroupMembersFromSheet() {
       // 更新工作表中的檢測欄位狀態為「已更新」
       if (updateStatusCol !== -1) {
         sheet.getRange(rowInfo.rowNumber, updateStatusCol + 1).setValue('已更新');
-     
       }
 
       // 避免 API 速率限制
