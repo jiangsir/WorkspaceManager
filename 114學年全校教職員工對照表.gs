@@ -8,7 +8,7 @@ function onOpen() {
       .addItem('處理新進員工帳號', 'processNewUsers')
       .addSeparator()
       .addItem('1.匯出[全部@tea清單]', 'exportAllUsers')
-      .addItem('2.依據[全部@tea清單] 更新 B,C,D,E,F,G 欄位內容', 'updateUsersFromSheet')
+      .addItem('2.依據[全部@tea清單] 更新 B,C,D,E,F,G,H 欄位內容', 'updateUsersFromSheet')
       .addToUi();
 }
 
@@ -137,15 +137,16 @@ function exportAllUsers() {
 
     logMessages.push('使用者資料讀取完成，共 ' + allUsers.length + ' 位使用者，開始整理資料...');
 
-    // 步驟 2: 準備要寫入工作表的資料
+    // 步驟 2: 準備要寫入工作表的資料（新增「所屬群組」欄位）
     var outputData = [[
-      '使用者 Email',
+      'Email',
       '姓 (Family Name)',
       '名 (Given Name)',
       '機構單位路徑',
-      'Employee ID',
-      'Employee Title',     // ← 調換順序：Employee Title 在前
-      'Department',         // ← 調換順序：Department 在後
+      '所屬群組',              // ← 新增：在 D、E 欄之間插入
+      'Employee ID(真實姓名)',
+      'Employee Title(部別領域)',
+      'Department(註解)',
       '帳號狀態',
       '建立時間',
       '最後登入時間',
@@ -159,6 +160,32 @@ function exportAllUsers() {
       var familyName = (user.name && user.name.familyName) ? user.name.familyName : 'N/A';
       var givenName = (user.name && user.name.givenName) ? user.name.givenName : 'N/A';
       var orgUnitPath = user.orgUnitPath || '/';
+
+      // 新增：取得使用者所屬的所有群組 Email
+      var userGroups = '';  // 修改：改為空字串，無群組時顯示空白
+      try {
+        var memberGroupEmails = [];
+        var groupPageToken;
+        do {
+          var groupPage = AdminDirectory.Groups.list({
+            userKey: user.primaryEmail,
+            maxResults: 200,
+            pageToken: groupPageToken,
+            fields: 'nextPageToken,groups(email)'
+          });
+          if (groupPage.groups) {
+            for (var g = 0; g < groupPage.groups.length; g++) {
+              memberGroupEmails.push(groupPage.groups[g].email);
+            }
+          }
+          groupPageToken = groupPage.nextPageToken;
+        } while (groupPageToken);
+
+        userGroups = memberGroupEmails.length > 0 ? memberGroupEmails.join(', ') : '';  // 修改：無群組時留空白
+      } catch (groupError) {
+        userGroups = '無法獲取';
+        Logger.log('無法獲取使用者 ' + user.primaryEmail + ' 的群組資訊: ' + groupError.message);
+      }
 
       // 取得 Employee ID
       var employeeId = 'N/A';
@@ -216,14 +243,20 @@ function exportAllUsers() {
         familyName,
         givenName,
         orgUnitPath,
-        employeeId,
-        employeeTitle,   // ← F欄：Employee Title 在前
-        department,      // ← G欄：Department 在後
-        status,
-        creationTime,
-        lastLoginTime,
-        '無需更新'
+        userGroups,      // ← 修改：E欄顯示所屬群組（群組 Email），無群組時留空白
+        employeeId,      // ← 原 E欄變成 F欄
+        employeeTitle,   // ← 原 F欄變成 G欄
+        department,      // ← 原 G欄變成 H欄
+        status,          // ← 原 H欄變成 I欄
+        creationTime,    // ← 原 I欄變成 J欄
+        lastLoginTime,   // ← 原 J欄變成 K欄
+        '無需更新'        // ← 原 K欄變成 L欄
       ]);
+
+      // 顯示進度（每處理 50 位使用者顯示一次）
+      if ((i + 1) % 50 === 0) {
+        logMessages.push('已處理 ' + (i + 1) + '/' + allUsers.length + ' 位使用者的群組資訊...');
+      }
     }
 
     // 步驟 4: 建立新工作表並寫入資料
@@ -241,31 +274,33 @@ function exportAllUsers() {
     // 先寫入資料（不包含公式）
     newSheet.getRange(1, 1, outputData.length, outputData[0].length).setValues(outputData);
 
-    // 步驟 5: 在工作表底部建立原始值參考區域
+    // 步驟 5: 在工作表底部建立原始值參考區域（修正欄數）
     var referenceStartRow = outputData.length + 3;
-    var referenceData = [['=== 原始值參考區域（系統用，請勿修改）===', '', '', '', '', '']];
+    var referenceData = [['=== 原始值參考區域（系統用，請勿修改）===', '', '', '', '', '', '', '']]; // 修正：8欄標題
 
-    // 複製 B、C、D、E、F、G 欄的原始值到參考區域
+    // 複製 B、C、D、E、F、G、H 欄的原始值到參考區域
     for (var i = 1; i < outputData.length; i++) { // 從第2行開始（跳過標題）
       referenceData.push([
         outputData[i][1], // B欄：姓 (Family Name)
         outputData[i][2], // C欄：名 (Given Name)  
         outputData[i][3], // D欄：機構單位路徑
-        outputData[i][4], // E欄：Employee ID
-        outputData[i][5], // F欄：Employee Title（調換後）
-        outputData[i][6]  // G欄：Department（調換後）
+        outputData[i][4], // E欄：所屬群組（新增）
+        outputData[i][5], // F欄：Employee ID
+        outputData[i][6], // G欄：Employee Title
+        outputData[i][7], // H欄：Department
+        ''               // 第8欄：留空以配合標題行的8欄
       ]);
     }
 
-    // 寫入參考區域
-    newSheet.getRange(referenceStartRow, 1, referenceData.length, 6).setValues(referenceData);
+    // 寫入參考區域（修正：改為8欄）
+    newSheet.getRange(referenceStartRow, 1, referenceData.length, 8).setValues(referenceData);
 
     // 隱藏參考區域
     if (referenceData.length > 1) {
       newSheet.hideRows(referenceStartRow, referenceData.length);
     }
 
-    // 步驟 6: 設定檢測公式（檢測 B、C、D、E、F、G 欄的變化）
+    // 步驟 6: 設定檢測公式（檢測 B、C、D、E、F、G、H 欄的變化）
     for (var rowIndex = 2; rowIndex <= outputData.length; rowIndex++) {
       var refRowIndex = referenceStartRow + (rowIndex - 1); // 對應的參考行
 
@@ -274,31 +309,33 @@ function exportAllUsers() {
         'B' + rowIndex + '<>$A$' + refRowIndex + ',' +  // B欄：姓
         'C' + rowIndex + '<>$B$' + refRowIndex + ',' +  // C欄：名
         'D' + rowIndex + '<>$C$' + refRowIndex + ',' +  // D欄：機構單位路徑
-        'E' + rowIndex + '<>$D$' + refRowIndex + ',' +  // E欄：Employee ID
-        'F' + rowIndex + '<>$E$' + refRowIndex + ',' +  // F欄：Employee Title
-        'G' + rowIndex + '<>$F$' + refRowIndex +        // G欄：Department
+        'E' + rowIndex + '<>$D$' + refRowIndex + ',' +  // E欄：所屬群組（新增）
+        'F' + rowIndex + '<>$E$' + refRowIndex + ',' +  // F欄：Employee ID
+        'G' + rowIndex + '<>$F$' + refRowIndex + ',' +  // G欄：Employee Title
+        'H' + rowIndex + '<>$G$' + refRowIndex +        // H欄：Department
         '),"需要更新","無需更新")';
 
-      newSheet.getRange(rowIndex, 11).setFormula(detectionFormula); // K欄（第11欄）
+      newSheet.getRange(rowIndex, 12).setFormula(detectionFormula); // L欄（第12欄）
     }
 
     // 步驟 7: 設定格式（固定寬度 + 自動裁剪內容）
     var columnWidths = {
-      1: 60,  // A欄：使用者 Email
+      1: 60,   // A欄：使用者 Email
       2: 60,   // B欄：姓 (Family Name)
       3: 60,   // C欄：名 (Given Name)
-      4: 300,  // D欄：機構單位路徑
-      5: 60,  // E欄：Employee ID
-      6: 60,  // F欄：Employee Title
-      7: 60,  // G欄：Department
-      8: 50,   // H欄：帳號狀態
-      9: 60,  // I欄：建立時間
-      10: 80, // J欄：最後登入時間
-      11: 60  // K欄：是否需要更新
+      4: 350,  // D欄：機構單位路徑
+      5: 150,  // E欄：所屬群組（新增，較寬以容納多個群組 Email）
+      6: 60,   // F欄：Employee ID
+      7: 60,   // G欄：Employee Title
+      8: 60,   // H欄：Department
+      9: 50,   // I欄：帳號狀態
+      10: 60,  // J欄：建立時間
+      11: 80,  // K欄：最後登入時間
+      12: 60   // L欄：是否需要更新
     };
 
     // 設定固定欄位寬度
-    for (var col = 1; col <= 11; col++) {
+    for (var col = 1; col <= 12; col++) {
       if (columnWidths[col]) {
         newSheet.setColumnWidth(col, columnWidths[col]);
       }
@@ -306,7 +343,7 @@ function exportAllUsers() {
 
     // 設定所有資料範圍的自動裁剪（文字換行）
     if (outputData.length > 1) {
-      var dataRange = newSheet.getRange(2, 1, outputData.length - 1, 11);
+      var dataRange = newSheet.getRange(2, 1, outputData.length - 1, 12);
       dataRange.setWrap(true); // 啟用自動換行以適應固定寬度
       dataRange.setVerticalAlignment('top'); // 垂直對齊頂部
     }
@@ -315,7 +352,7 @@ function exportAllUsers() {
 
     // 步驟 8: 設定「是否需要更新」欄位的條件格式
     if (outputData.length > 1) {
-      var detectionRange = newSheet.getRange(2, 11, outputData.length - 1, 1); // K欄（第11欄）
+      var detectionRange = newSheet.getRange(2, 12, outputData.length - 1, 1); // L欄（第12欄）
 
       var needUpdateRule = SpreadsheetApp.newConditionalFormatRule()
         .whenTextEqualTo("需要更新")
@@ -362,8 +399,8 @@ function exportAllUsers() {
 
 /**
  * 根據試算表中的資料更新使用者的機構單位路徑和職稱。
- * 讀取目前工作表中的資料，並更新對應使用者的 orgUnitPath、Employee ID、Employee Title 和 Department。
- * 只處理 K 欄標記為「需要更新」的行。
+ * 讀取目前工作表中的資料，並更新對應使用者的 orgUnitPath、Employee ID、Employee Title、Department 和群組歸屬。
+ * 只處理 L 欄標記為「需要更新」的行。
  */
 function updateUsersFromSheet() {
   var ui = SpreadsheetApp.getUi();
@@ -371,12 +408,14 @@ function updateUsersFromSheet() {
   // 第一層確認
   var confirmation = ui.alert(
     '更新使用者資訊',
-    '此功能將讀取目前工作表的資料，並更新使用者的姓名、機構單位路徑、員工編號、職稱和部門。\n\n' +
-    '★ 智能更新：只會處理 K 欄標記為「需要更新」的使用者。\n\n' +
+    '此功能將讀取目前工作表的資料，並更新使用者的姓名、機構單位路徑、員工編號、職稱、部門和群組歸屬。\n\n' +
+    '★ 智能更新：只會處理 L 欄標記為「需要更新」的使用者。\n' +
+    '★ 可更新欄位：B(姓)、C(名)、D(機構單位)、E(所屬群組)、F(員工編號)、G(職稱)、H(部門)\n\n' +
     '請確認：\n' +
     '1. 目前工作表包含正確的使用者資料\n' +
-    '2. 資料格式正確（包含 Email、姓、名、機構單位路徑、Employee ID、Employee Title、Department 欄位）\n' +
+    '2. 資料格式正確\n' +
     '3. 您已經手動修改了需要更新的資料\n\n' +
+    '⚠️ 注意：群組更新會完全替換使用者的群組歸屬！\n\n' +
     '確定要繼續嗎？',
     ui.ButtonSet.YES_NO
   );
@@ -398,24 +437,25 @@ function updateUsersFromSheet() {
   var headers = values[0];
   var data = values.slice(1);
 
-  // 查找各欄位的索引（調整順序後）
-  var emailCol = headers.indexOf('使用者 Email');
-  var familyNameCol = headers.indexOf('姓 (Family Name)');
-  var givenNameCol = headers.indexOf('名 (Given Name)');
-  var orgUnitPathCol = headers.indexOf('機構單位路徑');
-  var employeeIdCol = headers.indexOf('Employee ID');
-  var employeeTitleCol = headers.indexOf('Employee Title');  // ← 現在是 F 欄
-  var departmentCol = headers.indexOf('Department');         // ← 現在是 G 欄
-  var updateStatusCol = headers.indexOf('是否需要更新'); // 檢測欄位的索引
+  // 查找各欄位的索引（對應新的欄位順序）
+  var emailCol = headers.indexOf('Email');                        // A欄
+  var familyNameCol = headers.indexOf('姓 (Family Name)');        // B欄
+  var givenNameCol = headers.indexOf('名 (Given Name)');          // C欄
+  var orgUnitPathCol = headers.indexOf('機構單位路徑');            // D欄
+  var groupsCol = headers.indexOf('所屬群組');                    // E欄 (新增)
+  var employeeIdCol = headers.indexOf('Employee ID(真實姓名)');   // F欄
+  var employeeTitleCol = headers.indexOf('Employee Title(部別領域)'); // G欄
+  var departmentCol = headers.indexOf('Department(註解)');        // H欄
+  var updateStatusCol = headers.indexOf('是否需要更新');           // L欄
 
   // 檢查必要欄位是否存在
   if (emailCol === -1) {
-    ui.alert('錯誤', '找不到「使用者 Email」欄位。請確保工作表包含正確的標題。', ui.ButtonSet.OK);
+    ui.alert('錯誤', '找不到「Email」欄位。請確保工作表包含正確的標題。', ui.ButtonSet.OK);
     return;
   }
 
-  if (familyNameCol === -1 && givenNameCol === -1 && orgUnitPathCol === -1 && employeeIdCol === -1 && employeeTitleCol === -1 && departmentCol === -1) {
-    ui.alert('錯誤', '找不到任何可更新的欄位（姓、名、機構單位路徑、Employee ID、Employee Title、Department）。請確保工作表包含至少其中一個欄位。', ui.ButtonSet.OK);
+  if (familyNameCol === -1 && givenNameCol === -1 && orgUnitPathCol === -1 && groupsCol === -1 && employeeIdCol === -1 && employeeTitleCol === -1 && departmentCol === -1) {
+    ui.alert('錯誤', '找不到任何可更新的欄位。請確保工作表包含至少其中一个欄位。', ui.ButtonSet.OK);
     return;
   }
 
@@ -439,20 +479,46 @@ function updateUsersFromSheet() {
   if (rowsToUpdate.length === 0) {
     ui.alert('提示', '沒有找到需要更新的使用者。\n\n' +
       (updateStatusCol !== -1 ?
-        '所有使用者的 K 欄都顯示「無需更新」，或沒有有效的 Email。' :
+        '所有使用者的 L 欄都顯示「無需更新」，或沒有有效的 Email。' :
         '沒有找到有效的 Email。'),
       ui.ButtonSet.OK);
     return;
   }
 
+  // 建立群組名稱到群組Email的對應表（保留以支援群組名稱格式）
+  var groupNameToEmailMap = {};
+  try {
+    var allGroups = [];
+    var pageToken;
+    do {
+      var page = AdminDirectory.Groups.list({
+        customer: 'my_customer',
+        maxResults: 200,
+        pageToken: pageToken,
+        fields: 'nextPageToken,groups(name,email)'
+      });
+      if (page.groups) {
+        allGroups = allGroups.concat(page.groups);
+      }
+      pageToken = page.nextPageToken;
+    } while (pageToken);
+
+    for (var g = 0; g < allGroups.length; g++) {
+      groupNameToEmailMap[allGroups[g].name] = allGroups[g].email;
+    }
+  } catch (e) {
+    Logger.log('建立群組對應表時發生錯誤: ' + e.message);
+  }
+
   // 確認要處理的行數
   var confirmationFields = [];
-  if (familyNameCol !== -1) confirmationFields.push('• 更新姓氏');
-  if (givenNameCol !== -1) confirmationFields.push('• 更新名字');
-  if (orgUnitPathCol !== -1) confirmationFields.push('• 更新機構單位路徑');
-  if (employeeIdCol !== -1) confirmationFields.push('• 更新員工編號');
-  if (employeeTitleCol !== -1) confirmationFields.push('• 更新職稱資訊');
-  if (departmentCol !== -1) confirmationFields.push('• 更新部門');
+  if (familyNameCol !== -1) confirmationFields.push('• 更新姓氏 (B欄)');
+  if (givenNameCol !== -1) confirmationFields.push('• 更新名字 (C欄)');
+  if (orgUnitPathCol !== -1) confirmationFields.push('• 更新機構單位路徑 (D欄)');
+  if (groupsCol !== -1) confirmationFields.push('• 更新群組歸屬 (E欄)');
+  if (employeeIdCol !== -1) confirmationFields.push('• 更新員工編號 (F欄)');
+  if (employeeTitleCol !== -1) confirmationFields.push('• 更新職稱 (G欄)');
+  if (departmentCol !== -1) confirmationFields.push('• 更新部門 (H欄)');
 
   var finalConfirmation = ui.alert(
     '最終確認',
@@ -494,8 +560,9 @@ function updateUsersFromSheet() {
         continue;
       }
 
-      var needsUpdate = false;
+      var needsUserUpdate = false;
       var userObj = {};
+      var needsGroupUpdate = false;
 
       // 處理姓名更新
       var nameObj = {};
@@ -505,7 +572,7 @@ function updateUsersFromSheet() {
         var newFamilyName = String(row[familyNameCol] || '').trim();
         var currentFamilyName = (user.name && user.name.familyName) ? user.name.familyName : '';
 
-        if (newFamilyName && newFamilyName !== currentFamilyName) {
+        if (newFamilyName && newFamilyName !== 'N/A' && newFamilyName !== currentFamilyName) {
           nameObj.familyName = newFamilyName;
           nameUpdated = true;
           logMessages.push(logPrefix + '姓氏將從 "' + currentFamilyName + '" 更新為 "' + newFamilyName + '"');
@@ -516,7 +583,7 @@ function updateUsersFromSheet() {
         var newGivenName = String(row[givenNameCol] || '').trim();
         var currentGivenName = (user.name && user.name.givenName) ? user.name.givenName : '';
 
-        if (newGivenName && newGivenName !== currentGivenName) {
+        if (newGivenName && newGivenName !== 'N/A' && newGivenName !== currentGivenName) {
           nameObj.givenName = newGivenName;
           nameUpdated = true;
           logMessages.push(logPrefix + '名字將從 "' + currentGivenName + '" 更新為 "' + newGivenName + '"');
@@ -534,7 +601,7 @@ function updateUsersFromSheet() {
           }
         }
         userObj.name = nameObj;
-        needsUpdate = true;
+        needsUserUpdate = true;
       }
 
       // 處理機構單位路徑更新
@@ -542,7 +609,7 @@ function updateUsersFromSheet() {
         var newOrgUnitPath = String(row[orgUnitPathCol] || '').trim();
         if (newOrgUnitPath && newOrgUnitPath !== user.orgUnitPath) {
           userObj.orgUnitPath = newOrgUnitPath;
-          needsUpdate = true;
+          needsUserUpdate = true;
           logMessages.push(logPrefix + '機構單位路徑將從 "' + user.orgUnitPath + '" 更新為 "' + newOrgUnitPath + '"');
         }
       }
@@ -550,6 +617,7 @@ function updateUsersFromSheet() {
       // 處理 Employee ID 更新
       if (employeeIdCol !== -1) {
         var newEmployeeId = String(row[employeeIdCol] || '').trim();
+        if (newEmployeeId === 'N/A') newEmployeeId = '';
         
         // 取得目前的 Employee ID
         var currentEmployeeId = '';
@@ -574,7 +642,7 @@ function updateUsersFromSheet() {
             // 如果新 Employee ID 為空，清除 Employee ID
             userObj.externalIds = [];
           }
-          needsUpdate = true;
+          needsUserUpdate = true;
           logMessages.push(logPrefix + 'Employee ID 將從 "' + currentEmployeeId + '" 更新為 "' + newEmployeeId + '"');
         }
       }
@@ -602,6 +670,7 @@ function updateUsersFromSheet() {
       // 檢查 Employee Title 更新
       if (employeeTitleCol !== -1) {
         newEmployeeTitle = String(row[employeeTitleCol] || '').trim();
+        if (newEmployeeTitle === 'N/A') newEmployeeTitle = '';
         if (newEmployeeTitle !== currentTitle) {
           needsOrgUpdate = true;
           logMessages.push(logPrefix + 'Employee Title 將從 "' + currentTitle + '" 更新為 "' + newEmployeeTitle + '"');
@@ -615,6 +684,7 @@ function updateUsersFromSheet() {
       // 檢查 Department 更新
       if (departmentCol !== -1) {
         newDepartment = String(row[departmentCol] || '').trim();
+        if (newDepartment === 'N/A') newDepartment = '';
         if (newDepartment !== currentDepartment) {
           needsOrgUpdate = true;
           logMessages.push(logPrefix + 'Department 將從 "' + currentDepartment + '" 更新為 "' + newDepartment + '"');
@@ -642,13 +712,116 @@ function updateUsersFromSheet() {
           // 如果都為空，清除 organizations
           userObj.organizations = [];
         }
-        needsUpdate = true;
+        needsUserUpdate = true;
       }
 
-      // 執行更新
-      if (needsUpdate) {
+      // 處理群組更新
+      if (groupsCol !== -1) {
+        var newGroupsText = String(row[groupsCol] || '').trim();
+        needsGroupUpdate = true;
+        
+        // 解析新的群組列表
+        var newGroups = [];
+        if (newGroupsText && newGroupsText !== '無群組' && newGroupsText !== 'N/A' && newGroupsText !== '無法獲取' && newGroupsText !== '不適用') {
+          var groupIdentifiers = newGroupsText.split(',').map(function(identifier) { return identifier.trim(); });
+          
+          for (var j = 0; j < groupIdentifiers.length; j++) {
+            var groupIdentifier = groupIdentifiers[j];
+            if (groupIdentifier) {
+              // 檢查是否為群組 Email 格式（包含 @ 符號）
+              if (groupIdentifier.indexOf('@') !== -1) {
+                // 直接使用群組 Email
+                newGroups.push({
+                  identifier: groupIdentifier,
+                  email: groupIdentifier
+                });
+              } else if (groupNameToEmailMap[groupIdentifier]) {
+                // 使用群組名稱查找對應的 Email
+                newGroups.push({
+                  identifier: groupIdentifier,
+                  email: groupNameToEmailMap[groupIdentifier]
+                });
+              } else {
+                logMessages.push(logPrefix + '警告：無法識別群組 "' + groupIdentifier + '"，將跳過此群組。');
+              }
+            }
+          }
+        }
+
+        // 步驟 1: 獲取使用者目前所屬的所有群組
+        var currentGroups = [];
+        try {
+          var groupPageToken;
+          do {
+            var groupPage = AdminDirectory.Groups.list({
+              userKey: email,
+              maxResults: 200,
+              pageToken: groupPageToken,
+              fields: 'nextPageToken,groups(name,email)'
+            });
+            if (groupPage.groups) {
+              currentGroups = currentGroups.concat(groupPage.groups);
+            }
+            groupPageToken = groupPage.nextPageToken;
+          } while (groupPageToken);
+        } catch (e) {
+          logMessages.push(logPrefix + '無法獲取目前群組歸屬: ' + e.message);
+        }
+
+        logMessages.push(logPrefix + '目前屬於 ' + currentGroups.length + ' 個群組，將更新為 ' + newGroups.length + ' 個群組。');
+
+        // 步驟 2: 從所有目前群組中移除該使用者
+        var removeCount = 0;
+        var removeErrors = 0;
+        for (var k = 0; k < currentGroups.length; k++) {
+          try {
+            AdminDirectory.Members.remove(currentGroups[k].email, email);
+            removeCount++;
+          } catch (removeError) {
+            removeErrors++;
+            logMessages.push(logPrefix + '從群組 "' + currentGroups[k].name + '" 移除時失敗: ' + removeError.message);
+          }
+        }
+
+        if (removeCount > 0) {
+          logMessages.push(logPrefix + '成功從 ' + removeCount + ' 個群組中移除' + (removeErrors > 0 ? '（失敗 ' + removeErrors + ' 個）' : '') + '。');
+        }
+
+        // 步驟 3: 將使用者加入到新的群組中
+        var addCount = 0;
+        var addErrors = 0;
+        for (var k = 0; k < newGroups.length; k++) {
+          try {
+            AdminDirectory.Members.insert({
+              email: email,
+              role: "MEMBER"
+            }, newGroups[k].email);
+            addCount++;
+          } catch (addError) {
+            if (addError.message.includes("Member already exists") || addError.message.includes("duplicate")) {
+              logMessages.push(logPrefix + '已是群組 "' + newGroups[k].identifier + '" 的成員。');
+              addCount++; // 視為成功
+            } else {
+              addErrors++;
+              logMessages.push(logPrefix + '加入群組 "' + newGroups[k].identifier + '" 時失敗: ' + addError.message);
+            }
+          }
+        }
+
+        if (newGroups.length > 0) {
+          logMessages.push(logPrefix + '成功加入 ' + addCount + ' 個群組' + (addErrors > 0 ? '（失敗 ' + addErrors + ' 個）' : '') + '。');
+        } else {
+          logMessages.push(logPrefix + '群組欄位為空，使用者現在不屬於任何群組。');
+        }
+      }
+
+      // 執行使用者資料更新
+      if (needsUserUpdate) {
         AdminDirectory.Users.update(userObj, email);
-        logMessages.push(logPrefix + '使用者資料已成功更新。');
+        logMessages.push(logPrefix + '使用者基本資料已成功更新。');
+      }
+
+      if (needsUserUpdate || needsGroupUpdate) {
         successCount++;
 
         // 更新工作表中的檢測欄位狀態為「已更新」
@@ -661,8 +834,8 @@ function updateUsersFromSheet() {
       }
 
       // 避免 API 速率限制
-      if (i % 10 === 9) {
-        Utilities.sleep(100);
+      if (i % 5 === 4) {
+        Utilities.sleep(200);
       }
 
     } catch (e) {
