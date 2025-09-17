@@ -8,7 +8,7 @@ function onOpen() {
       .addItem('處理新進員工帳號', 'processNewUsers')
       .addSeparator()
       .addItem('1.匯出[全部@tea清單]', 'exportAllUsers')
-      .addItem('2.依據匯出sheet 只更新使用者姓、名、機構單位、職稱', 'updateUsersFromSheet')
+      .addItem('2.依據[全部@tea清單] 更新 B,C,D,E,F,G 欄位內容', 'updateUsersFromSheet')
       .addToUi();
 }
 
