@@ -188,7 +188,7 @@ function exportNewUserTemplate() {
     // 步驟 4: 建立新工作表並寫入資料
     var spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
     var timestamp = new Date().toISOString().slice(0, 10).replace(/-/g, '');
-    var sheetName = "[新建範本]_" + timestamp;
+    var sheetName = "[新建範本tea]" + timestamp;
 
     var existingSheet = spreadsheet.getSheetByName(sheetName);
     if (existingSheet) {

@@ -137,7 +137,7 @@ function exportAllUsers() {
 
     logMessages.push('使用者資料讀取完成，共 ' + allUsers.length + ' 位使用者，開始整理資料...');
 
-    // 步驟 2: 準備要寫入工作表的資料（新增「所屬群組」欄位）
+    // 步驟 2: 準備要寫入工作表的資料（新增「所屬群組」欄位和「現職狀態」欄位）
     var outputData = [[
       'Email',
       '姓 (Family Name)',
@@ -150,7 +150,8 @@ function exportAllUsers() {
       '帳號狀態',
       '建立時間',
       '最後登入時間',
-      '是否需要更新'
+      '是否需要更新',
+      '現職狀態'              // ← 新增：M欄現職狀態
     ]];
 
     // 步驟 3: 處理每位使用者的資料
@@ -250,7 +251,8 @@ function exportAllUsers() {
         status,          // ← 原 H欄變成 I欄
         creationTime,    // ← 原 I欄變成 J欄
         lastLoginTime,   // ← 原 J欄變成 K欄
-        '無需更新'        // ← 原 K欄變成 L欄
+        '無需更新',       // ← 原 K欄變成 L欄
+        ''               // ← 新增：M欄現職狀態，先填空值，稍後設定公式
       ]);
 
       // 顯示進度（每處理 50 位使用者顯示一次）
@@ -273,6 +275,12 @@ function exportAllUsers() {
 
     // 先寫入資料（不包含公式）
     newSheet.getRange(1, 1, outputData.length, outputData[0].length).setValues(outputData);
+
+    // 設定 M 欄的現職狀態公式
+    for (var rowIndex = 2; rowIndex <= outputData.length; rowIndex++) {
+      var statusFormula = '=IF(ISNA(VLOOKUP(A' + rowIndex + ',\'114學年全校教職員工對照表\'!F:F,1,FALSE)),"","現職")';
+      newSheet.getRange(rowIndex, 13).setFormula(statusFormula); // M欄（第13欄）
+    }
 
     // 步驟 5: 在工作表底部建立原始值參考區域（修正欄數）
     var referenceStartRow = outputData.length + 3;
@@ -331,11 +339,12 @@ function exportAllUsers() {
       9: 50,   // I欄：帳號狀態
       10: 60,  // J欄：建立時間
       11: 80,  // K欄：最後登入時間
-      12: 60   // L欄：是否需要更新
+      12: 60,  // L欄：是否需要更新
+      13: 60   // M欄：現職狀態
     };
 
     // 設定固定欄位寬度
-    for (var col = 1; col <= 12; col++) {
+    for (var col = 1; col <= 13; col++) {
       if (columnWidths[col]) {
         newSheet.setColumnWidth(col, columnWidths[col]);
       }
@@ -343,7 +352,7 @@ function exportAllUsers() {
 
     // 設定所有資料範圍的自動裁剪（文字換行）
     if (outputData.length > 1) {
-      var dataRange = newSheet.getRange(2, 1, outputData.length - 1, 12);
+      var dataRange = newSheet.getRange(2, 1, outputData.length - 1, 13);
       dataRange.setWrap(true); // 啟用自動換行以適應固定寬度
       dataRange.setVerticalAlignment('top'); // 垂直對齊頂部
     }
