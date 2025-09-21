@@ -11,7 +11,7 @@ const MailStatusColumnIndex = 8; // 假設郵件狀態在第 9 欄（I 欄）
 function onOpen() {
   const ui = SpreadsheetApp.getUi();
   ui.createMenu('使用者管理工具')
-    .addItem('匯出範本', 'xxxxxx')
+    .addItem('匯出預約停權範本', 'xxxxxx')
     .addSeparator()
     .addItem('寄發本工作表內的連續通知信', 'scheduleNotificationEmails')
     .addItem('建立/更新本工作表內的停權觸發器', 'scheduleSuspendUsersByTime')
