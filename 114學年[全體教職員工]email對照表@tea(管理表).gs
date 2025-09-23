@@ -905,49 +905,231 @@ function cleanAllTriggers() {
 function listAllTriggers() {
   var ui = SpreadsheetApp.getUi();
   var triggers = ScriptApp.getProjectTriggers();
-  var triggerList = [];
-
-  // 收集所有觸發器的資訊
-  for (var i = 0; i < triggers.length; i++) {
-    var trigger = triggers[i];
-    triggerList.push([
-      trigger.getHandlerFunction(),
-      trigger.getEventType(),
-      trigger.getTriggerSource(),
-      trigger.getTriggerSourceId()
-    ]);
-  }
-
-  // 如果沒有觸發器，顯示提示訊息
-  if (triggerList.length === 0) {
-    ui.alert('目前沒有任何觸發器。');
+  var currentSheet = SpreadsheetApp.getActiveSheet().getName();
+  
+  if (triggers.length === 0) {
+    ui.alert('觸發器狀態', '目前整個專案中沒有任何觸發器。', ui.ButtonSet.OK);
     return;
   }
 
-  // 顯示觸發器資訊
-  var htmlOutput = HtmlService.createHtmlOutput('<h3>當前試算表觸發器列表</h3>');
-  htmlOutput.append('<table style="width:100%; border-collapse:collapse;">');
-  htmlOutput.append('<tr style="background-color:#f2f2f2; font-weight:bold;">');
-  htmlOutput.append('<th style="border:1px solid #ddd; padding:8px;">處理函數</th>');
-  htmlOutput.append('<th style="border:1px solid #ddd; padding:8px;">事件類型</th>');
-  htmlOutput.append('<th style="border:1px solid #ddd; padding:8px;">觸發來源</th>');
-  htmlOutput.append('<th style="border:1px solid #ddd; padding:8px;">來源 ID</th>');
-  htmlOutput.append('</tr>');
+  // 分類觸發器
+  var suspendTriggers = [];
+  var notificationTriggers = [];
+  var otherTriggers = [];
 
-  for (var i = 0; i < triggerList.length; i++) {
-    var trigger = triggerList[i];
-    htmlOutput.append('<tr>');
-    htmlOutput.append('<td style="border:1px solid #ddd; padding:8px;">' + trigger[0] + '</td>');
-    htmlOutput.append('<td style="border:1px solid #ddd; padding:8px;">' + trigger[1] + '</td>');
-    htmlOutput.append('<td style="border:1px solid #ddd; padding:8px;">' + trigger[2] + '</td>');
-    htmlOutput.append('<td style="border:1px solid #ddd; padding:8px;">' + trigger[3] + '</td>');
-    htmlOutput.append('</tr>');
+  for (var i = 0; i < triggers.length; i++) {
+    var trigger = triggers[i];
+    var handlerFunction = trigger.getHandlerFunction();
+    var uniqueId = trigger.getUniqueId();
+    
+    // 基本資訊
+    var triggerInfo = {
+      id: uniqueId,
+      handler: handlerFunction,
+      eventType: trigger.getEventType().toString(),
+      source: trigger.getTriggerSource().toString(),
+      sourceId: trigger.getTriggerSourceId()
+    };
+
+    // 獲取詳細資訊
+    if (handlerFunction === 'suspendUsersAtTime') {
+      var propKey = `trigger_${uniqueId}`;
+      var storedData = PropertiesService.getScriptProperties().getProperty(propKey);
+      if (storedData) {
+        try {
+          var triggerData = JSON.parse(storedData);
+          triggerInfo.targetTime = triggerData.targetTime;
+          triggerInfo.sheetName = triggerData.sheetName;
+          triggerInfo.accountCount = triggerData.accountCount;
+          triggerInfo.isCurrentSheet = (triggerData.sheetName === currentSheet);
+        } catch (e) {
+          triggerInfo.error = '資料格式錯誤';
+        }
+      } else {
+        triggerInfo.error = '找不到觸發器資料';
+      }
+      suspendTriggers.push(triggerInfo);
+      
+    } else if (handlerFunction === 'sendNotificationEmails') {
+      var propKey = `notification_trigger_${uniqueId}`;
+      var storedData = PropertiesService.getScriptProperties().getProperty(propKey);
+      if (storedData) {
+        try {
+          var triggerData = JSON.parse(storedData);
+          triggerInfo.notificationTime = triggerData.notificationTime;
+          triggerInfo.weeksBeforeSuspend = triggerData.weeksBeforeSuspend;
+          triggerInfo.hoursBeforeSuspend = triggerData.hoursBeforeSuspend;
+          triggerInfo.isHourNotification = triggerData.isHourNotification;
+          triggerInfo.sheetName = triggerData.sheetName;
+          triggerInfo.accountCount = triggerData.accountCount;
+          triggerInfo.isCurrentSheet = (triggerData.sheetName === currentSheet);
+        } catch (e) {
+          triggerInfo.error = '資料格式錯誤';
+        }
+      } else {
+        triggerInfo.error = '找不到觸發器資料';
+      }
+      notificationTriggers.push(triggerInfo);
+      
+    } else {
+      otherTriggers.push(triggerInfo);
+    }
   }
 
-  htmlOutput.append('</table>');
-  htmlOutput.append('<p>總共 ' + triggerList.length + ' 個觸發器。</p>');
+  // 建立 HTML 內容
+  var htmlContent = `
+    <style>
+      body { font-family: 'Microsoft JhengHei', Arial, sans-serif; margin: 10px; }
+      h3 { color: #1a73e8; margin-bottom: 15px; }
+      h4 { color: #d73027; margin-top: 20px; margin-bottom: 10px; }
+      .section { margin-bottom: 25px; border: 1px solid #e0e0e0; border-radius: 8px; padding: 15px; }
+      .trigger-item { 
+        background: #f8f9fa; 
+        border-left: 4px solid #1a73e8; 
+        margin: 10px 0; 
+        padding: 12px; 
+        border-radius: 4px;
+      }
+      .current-sheet { border-left-color: #34a853 !important; background: #e8f5e8; }
+      .error { border-left-color: #ea4335 !important; background: #fce8e6; }
+      .info-row { margin: 5px 0; }
+      .label { font-weight: bold; color: #5f6368; }
+      .value { color: #202124; }
+      .time { color: #1967d2; font-weight: 500; }
+      .count { color: #137333; font-weight: 500; }
+      .error-text { color: #d93025; font-weight: 500; }
+      .summary { background: #e3f2fd; padding: 12px; border-radius: 6px; margin-bottom: 20px; }
+      .no-data { color: #5f6368; font-style: italic; text-align: center; padding: 20px; }
+    </style>
+  `;
 
-  ui.showModalDialog(htmlOutput, '觸發器列表');
+  htmlContent += `<h3>📋 觸發器詳細列表</h3>`;
+  
+  // 摘要資訊
+  var currentSheetSuspendCount = suspendTriggers.filter(function(t) { return t.isCurrentSheet; }).length;
+  var currentSheetNotificationCount = notificationTriggers.filter(function(t) { return t.isCurrentSheet; }).length;
+  var totalCurrentSheet = currentSheetSuspendCount + currentSheetNotificationCount;
+  
+  htmlContent += `
+    <div class="summary">
+      <strong>📊 摘要統計</strong><br>
+      • 總觸發器數量：<span class="count">${triggers.length}</span> 個<br>
+      • 目前工作表「${currentSheet}」相關：<span class="count">${totalCurrentSheet}</span> 個<br>
+      • 停權觸發器：<span class="count">${suspendTriggers.length}</span> 個（其中 ${currentSheetSuspendCount} 個屬於目前工作表）<br>
+      • 通知觸發器：<span class="count">${notificationTriggers.length}</span> 個（其中 ${currentSheetNotificationCount} 個屬於目前工作表）<br>
+      • 其他觸發器：<span class="count">${otherTriggers.length}</span> 個
+    </div>
+  `;
+
+  // 停權觸發器詳情
+  htmlContent += `<div class="section">`;
+  htmlContent += `<h4>🚫 停權觸發器 (${suspendTriggers.length} 個)</h4>`;
+  
+  if (suspendTriggers.length === 0) {
+    htmlContent += `<div class="no-data">目前沒有停權觸發器</div>`;
+  } else {
+    for (var i = 0; i < suspendTriggers.length; i++) {
+      var trigger = suspendTriggers[i];
+      var itemClass = 'trigger-item';
+      if (trigger.isCurrentSheet) itemClass += ' current-sheet';
+      if (trigger.error) itemClass += ' error';
+      
+      htmlContent += `<div class="${itemClass}">`;
+      htmlContent += `<div class="info-row"><span class="label">📌 觸發器 #${i + 1}</span></div>`;
+      
+      if (trigger.error) {
+        htmlContent += `<div class="info-row"><span class="label">❌ 錯誤：</span><span class="error-text">${trigger.error}</span></div>`;
+      } else {
+        var targetDate = new Date(trigger.targetTime);
+        htmlContent += `<div class="info-row"><span class="label">⏰ 停權時間：</span><span class="time">${targetDate.toLocaleString('zh-TW')}</span></div>`;
+        htmlContent += `<div class="info-row"><span class="label">📄 工作表：</span><span class="value">${trigger.sheetName}</span> ${trigger.isCurrentSheet ? '(目前工作表)' : ''}</div>`;
+        htmlContent += `<div class="info-row"><span class="label">👥 影響帳號：</span><span class="count">${trigger.accountCount}</span> 個</div>`;
+      }
+      
+      htmlContent += `<div class="info-row"><span class="label">🔧 函數：</span><span class="value">${trigger.handler}</span></div>`;
+      htmlContent += `<div class="info-row"><span class="label">🆔 ID：</span><span class="value">${trigger.id}</span></div>`;
+      htmlContent += `</div>`;
+    }
+  }
+  htmlContent += `</div>`;
+
+  // 通知觸發器詳情
+  htmlContent += `<div class="section">`;
+  htmlContent += `<h4>📧 通知觸發器 (${notificationTriggers.length} 個)</h4>`;
+  
+  if (notificationTriggers.length === 0) {
+    htmlContent += `<div class="no-data">目前沒有通知觸發器</div>`;
+  } else {
+    for (var i = 0; i < notificationTriggers.length; i++) {
+      var trigger = notificationTriggers[i];
+      var itemClass = 'trigger-item';
+      if (trigger.isCurrentSheet) itemClass += ' current-sheet';
+      if (trigger.error) itemClass += ' error';
+      
+      htmlContent += `<div class="${itemClass}">`;
+      htmlContent += `<div class="info-row"><span class="label">📌 觸發器 #${i + 1}</span></div>`;
+      
+      if (trigger.error) {
+        htmlContent += `<div class="info-row"><span class="label">❌ 錯誤：</span><span class="error-text">${trigger.error}</span></div>`;
+      } else {
+        var notificationDate = new Date(trigger.notificationTime);
+        var timeDesc = trigger.isHourNotification ? 
+          `停權前 ${trigger.hoursBeforeSuspend} 小時` : 
+          `停權前 ${trigger.weeksBeforeSuspend} 週`;
+        
+        htmlContent += `<div class="info-row"><span class="label">📨 通知時間：</span><span class="time">${notificationDate.toLocaleString('zh-TW')}</span></div>`;
+        htmlContent += `<div class="info-row"><span class="label">⏱️ 通知類型：</span><span class="value">${timeDesc}</span></div>`;
+        htmlContent += `<div class="info-row"><span class="label">📄 工作表：</span><span class="value">${trigger.sheetName}</span> ${trigger.isCurrentSheet ? '(目前工作表)' : ''}</div>`;
+        htmlContent += `<div class="info-row"><span class="label">👥 影響帳號：</span><span class="count">${trigger.accountCount}</span> 個</div>`;
+      }
+      
+      htmlContent += `<div class="info-row"><span class="label">🔧 函數：</span><span class="value">${trigger.handler}</span></div>`;
+      htmlContent += `<div class="info-row"><span class="label">🆔 ID：</span><span class="value">${trigger.id}</span></div>`;
+      htmlContent += `</div>`;
+    }
+  }
+  htmlContent += `</div>`;
+
+  // 其他觸發器詳情
+  if (otherTriggers.length > 0) {
+    htmlContent += `<div class="section">`;
+    htmlContent += `<h4>🔧 其他觸發器 (${otherTriggers.length} 個)</h4>`;
+    
+    for (var i = 0; i < otherTriggers.length; i++) {
+      var trigger = otherTriggers[i];
+      htmlContent += `<div class="trigger-item">`;
+      htmlContent += `<div class="info-row"><span class="label">📌 觸發器 #${i + 1}</span></div>`;
+      htmlContent += `<div class="info-row"><span class="label">🔧 函數：</span><span class="value">${trigger.handler}</span></div>`;
+      htmlContent += `<div class="info-row"><span class="label">📋 事件類型：</span><span class="value">${trigger.eventType}</span></div>`;
+      htmlContent += `<div class="info-row"><span class="label">📂 觸發來源：</span><span class="value">${trigger.source}</span></div>`;
+      htmlContent += `<div class="info-row"><span class="label">🆔 ID：</span><span class="value">${trigger.id}</span></div>`;
+      htmlContent += `</div>`;
+    }
+    
+    htmlContent += `</div>`;
+  }
+
+  // 說明文字
+  htmlContent += `
+    <div class="section">
+      <h4>📋 說明</h4>
+      <div style="font-size: 14px; line-height: 1.6;">
+        <p><strong>🟢 綠色背景</strong>：屬於目前工作表「${currentSheet}」的觸發器</p>
+        <p><strong>🔵 藍色背景</strong>：其他工作表的觸發器</p>
+        <p><strong>🔴 紅色背景</strong>：有錯誤或資料缺失的觸發器</p>
+        <br>
+        <p><strong>停權觸發器</strong>：在指定時間自動停權使用者帳號</p>
+        <p><strong>通知觸發器</strong>：在停權前的指定時間發送通知信</p>
+        <p><strong>其他觸發器</strong>：非停權相關的觸發器（如定時匯出等）</p>
+      </div>
+    </div>
+  `;
+
+  var htmlOutput = HtmlService.createHtmlOutput(htmlContent)
+    .setWidth(800)
+    .setHeight(600);
+
+  ui.showModalDialog(htmlOutput, `📋 觸發器詳細列表 (共 ${triggers.length} 個)`);
 }
 
 /**
@@ -1958,8 +2140,7 @@ function suspendUsersAtTime(e) {
     }
 
   } catch (error) {
-    console.log('觸發器執行發生錯誤:', error.message);
-    console.log('錯誤詳細:', error.toString());
+    console.log('觸發器執行發生錯誤:', error);
   }
 }
 
